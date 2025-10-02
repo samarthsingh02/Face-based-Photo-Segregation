@@ -1,41 +1,20 @@
-# ----------------------------------------------------
-# Configuration for the Face Sorting Project
-# ----------------------------------------------------
-
-# --- 1. Active Preset ---
-# Set the active model preset to use.
-# Options: "hog_fast" or "cnn_accurate"
-active_model: "hog_fast"
-
-# --- 2. Model Presets ---
-# Contains all settings that are specific to a given model.
-# The script will use the settings from the 'active_model' defined above.
+active_model: cnn_accurate
 presets:
   hog_fast:
-    detector: "hog"
+    detector: hog
     eps: 0.45
     resize_width: 450
-
   cnn_accurate:
-    detector: "cnn"
-    eps: 0.5       # NOTE: Placeholder! Tune this value after your experiment.
-    resize_width: 800  # NOTE: Placeholder! Tune this value after your experiment.
-
-# --- 3. General Settings ---
-# These settings apply to all runs, regardless of the active model.
-
+    detector: cnn
+    eps: 0.375
+    resize_width: 1000
 directory_paths:
-  source: "source_images"
-  output: "output_sorted"
-  log_file: "run_log.txt"
-  ground_truth: "ground_truth.json"
-
+  source: source_images
+  output: output_sorted
+  log_file: run_log.txt
+  ground_truth: ground_truth.json
 clustering_settings:
-  # Min Samples: The minimum number of similar faces required to form a group.
   min_samples: 2
-
 output_settings:
-  # The prefix for the sorted person folders (e.g., Person_1, Person_2).
-  folder_prefix: "Person_"
-  # The name for the folder containing faces that don't belong to any cluster.
-  unknowns_folder: "Unknowns"
+  folder_prefix: Person_
+  unknowns_folder: Unknowns
