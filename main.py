@@ -2,7 +2,9 @@ import argparse
 import os
 import shutil
 import time
-import logging  # Import the logging library
+import logging
+import json
+
 
 import face_recognition
 import numpy as np
@@ -26,7 +28,7 @@ def init_logging():
 # ... (argparse and directory setup remains the same) ...
 parser = argparse.ArgumentParser(description="Segregate photos based on faces.")
 parser.add_argument("--detector", type=str, default="hog", choices=["hog", "cnn"], help="Face detection model to use.")
-parser.add_argument("--eps", type=float, default=0.5, help="DBSCAN epsilon value.")
+parser.add_argument("--eps", type=float, default=0.45, help="DBSCAN epsilon value.")
 args = parser.parse_args()
 
 SOURCE_DIR = "source_images"
@@ -110,6 +112,71 @@ def organize_files(all_face_data):
     logging.info("File organization complete!")
 
 
+def generate_accuracy_report(clustered_data):
+    """
+    Compares clustering results to a ground truth file and generates a report.
+    """
+    ground_truth_path = "ground_truth.json"
+    if not os.path.exists(ground_truth_path):
+        logging.warning("ground_truth.json not found. Skipping accuracy report.")
+        return "Ground truth file not found."
+
+    with open(ground_truth_path, 'r') as f:
+        ground_truth = json.load(f)
+
+    # First, let's figure out which cluster ID corresponds to which person's name.
+    # We'll use a "voting" system. The name that appears most in a cluster "wins" it.
+    cluster_to_name_map = {}
+    clusters = {data['cluster_id'] for data in clustered_data if data['cluster_id'] != -1}
+
+    for cluster_id in clusters:
+        votes = {}
+        # Get all images belonging to this cluster
+        images_in_cluster = [data['image_path'] for data in clustered_data if data['cluster_id'] == cluster_id]
+
+        for image_path in images_in_cluster:
+            filename = os.path.basename(image_path)
+            true_names = ground_truth.get(filename, [])
+            for name in true_names:
+                votes[name] = votes.get(name, 0) + 1
+
+        if votes:
+            winner_name = max(votes, key=votes.get)
+            cluster_to_name_map[cluster_id] = winner_name
+
+    # Now, generate the report
+    report = ["\n", "---------------- ACCURACY REPORT -----------------"]
+    correct_classifications = 0
+    incorrect_classifications = []
+
+    for data in clustered_data:
+        filename = os.path.basename(data['image_path'])
+        cluster_id = data['cluster_id']
+
+        predicted_name = cluster_to_name_map.get(cluster_id, "Unknown")
+        true_names = ground_truth.get(filename, ["Unknown"])
+
+        if predicted_name in true_names:
+            correct_classifications += 1
+        else:
+            incorrect_classifications.append(
+                f"  - FAILED: '{filename}' was predicted as '{predicted_name}' but should contain {true_names}"
+            )
+
+    total_faces = len(clustered_data)
+    accuracy = (correct_classifications / total_faces) * 100 if total_faces > 0 else 0
+
+    report.append(f"- Cluster to Name Mapping: {cluster_to_name_map}")
+    report.append(f"- Accuracy: {correct_classifications}/{total_faces} ({accuracy:.2f}%) faces correctly classified.")
+    report.append("- Mismatches:")
+    if incorrect_classifications:
+        report.extend(incorrect_classifications)
+    else:
+        report.append("  - None! Great job!")
+    report.append("--------------------------------------------------")
+
+    return "\n".join(report)
+
 # --- Logging Summary ---
 def log_run_summary(stats):
     summary = f"""
@@ -124,6 +191,7 @@ def log_run_summary(stats):
     - Total Execution Time: {stats['execution_time']:.2f} seconds
     -----------------------------------------------------
     """
+    summary += stats.get("accuracy_report", "") # <-- ADD THIS LINE
     logging.info(summary)
 
 
@@ -154,9 +222,12 @@ if __name__ == "__main__":
         run_stats["people_found"] = people_count
         run_stats["unknown_faces"] = unknown_count
         organize_files(clustered_data)
+        run_stats["accuracy_report"] = generate_accuracy_report(clustered_data)
     else:
         run_stats["people_found"] = 0
         run_stats["unknown_faces"] = 0
+        run_stats["accuracy_report"] = "No faces processed."
+
 
     end_time = time.time()
     run_stats["execution_time"] = end_time - start_time
