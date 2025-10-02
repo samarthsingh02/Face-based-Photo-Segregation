@@ -1,0 +1,28 @@
+# Virtual Environment
+venv/
+/venv/
+.venv/
+
+# PyCharm specific files
+.idea/
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# Log files
+*.log
+run_log.txt
+
+# Operating System files
+.DS_Store
+Thumbs.db
+
+# Media folders
+# Ignore all files within the source and output directories...
+source_images/*
+output_sorted/*
+
+# ...but DO NOT ignore the placeholder files inside them!
+!source_images/.gitkeep
+!output_sorted/.gitkeep
