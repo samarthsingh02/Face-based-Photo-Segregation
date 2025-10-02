@@ -1,16 +1,31 @@
-import argparse
 import os
 import shutil
 import time
 import logging
 import json
 import cv2
-
-
+import yaml
 
 import face_recognition
 import numpy as np
 from sklearn.cluster import DBSCAN
+
+# --- Load Configuration ---
+try:
+    with open('config.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+
+    DETECTOR_MODEL = config['model_settings']['detector']
+    EPS_VALUE = config['model_settings']['eps']
+    SOURCE_DIR = config['directory_settings']['source_folder']
+    OUTPUT_DIR = config['directory_settings']['output_folder']
+
+except FileNotFoundError:
+    print("Error: config.yaml not found. Please create it.")
+    exit()
+except KeyError as e:
+    print(f"Error: Missing key in config.yaml: {e}")
+    exit()
 
 
 # --- Logger Configuration ---
@@ -27,12 +42,6 @@ def init_logging():
 
 
 # --- Phase 0: Setup & Configuration ---
-# ... (argparse and directory setup remains the same) ...
-parser = argparse.ArgumentParser(description="Segregate photos based on faces.")
-parser.add_argument("--detector", type=str, default="hog", choices=["hog", "cnn"], help="Face detection model to use.")
-parser.add_argument("--eps", type=float, default=0.45, help="DBSCAN epsilon value.")
-args = parser.parse_args()
-
 SOURCE_DIR = "source_images"
 OUTPUT_DIR = "output_sorted"
 
@@ -69,8 +78,8 @@ def process_images():
             rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
             # Face Detection (now use the resized rgb_image)
-            locations = face_recognition.face_locations(rgb_image, model=args.detector)
-            logging.info(f"  Found {len(locations)} face(s) using '{args.detector}' model.")
+            locations = face_recognition.face_locations(rgb_image, model=DETECTOR_MODEL)
+            logging.info(f"  Found {len(locations)} face(s) using '{DETECTOR_MODEL}' model.")
 
             # --- FIX: Update face count using the correct locations ---
             total_faces_found += len(locations)
@@ -98,7 +107,7 @@ def cluster_faces(all_face_data):
     logging.info("Starting face clustering...")
     encodings = np.array([data['encoding'] for data in all_face_data])
 
-    clt = DBSCAN(metric="euclidean", eps=args.eps, min_samples=2)
+    clt = DBSCAN(metric="euclidean", eps=EPS_VALUE, min_samples=2)
     clt.fit(encodings)
 
     # Calculate cluster statistics
@@ -228,12 +237,12 @@ if __name__ == "__main__":
 
     run_stats = {
         "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
-        "detector_model": args.detector,
-        "eps_value": args.eps
+        "detector_model": DETECTOR_MODEL,
+        "eps_value": EPS_VALUE
     }
 
     logging.info(f"-- Starting New Run --")
-    logging.info(f"Parameters: detector={args.detector}, eps={args.eps}")
+    logging.info(f"Parameters: detector={DETECTOR_MODEL}, eps={EPS_VALUE}")
 
     if os.path.exists(OUTPUT_DIR):
         shutil.rmtree(OUTPUT_DIR)

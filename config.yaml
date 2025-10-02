@@ -1,0 +1,42 @@
+# ----------------------------------------------------
+# Configuration for the Face Sorting Project
+# ----------------------------------------------------
+
+# --- 1. Directory Paths ---
+# Locations for all input and output files and folders.
+directory_paths:
+  source: "source_images"
+  output: "output_sorted"
+  log_file: "run_log.txt"
+  ground_truth: "ground_truth.json"
+
+# --- 2. Model Parameters ---
+# Settings that control the behavior of the machine learning models.
+model_parameters:
+  # Face detection model.
+  # Options: "hog" (fast, less accurate) or "cnn" (slow, very accurate).
+  detector: "hog"
+
+  # DBSCAN clustering settings.
+  clustering:
+    # Epsilon: Max distance between faces to be in the same group.
+    # Good values are typically between 0.4 and 0.6.
+    eps: 0.45
+    # Min Samples: The minimum number of similar faces required to form a person's group.
+    # A value of 2 is a good starting point.
+    min_samples: 2
+
+# --- 3. Processing Settings ---
+# Parameters that affect how images are handled before analysis.
+processing_settings:
+  # Images wider than this value (in pixels) will be resized before processing
+  # to speed up detection. Set to a very high number (e.g., 9999) to disable.
+  resize_width: 1000
+
+# --- 4. Output Settings ---
+# Controls the naming of the output folders.
+output_settings:
+  # The prefix for the sorted person folders (e.g., Person_1, Person_2).
+  folder_prefix: "Person_"
+  # The name for the folder containing faces that don't belong to any cluster.
+  unknowns_folder: "Unknowns"
