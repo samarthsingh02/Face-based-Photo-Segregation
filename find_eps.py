@@ -4,6 +4,8 @@ import numpy as np
 from sklearn.neighbors import NearestNeighbors
 import matplotlib.pyplot as plt
 import logging
+from tqdm import tqdm
+
 
 # --- Configure Logging ---
 # (Using a simple logger for this helper script)
@@ -33,16 +35,15 @@ def find_optimal_eps():
         logging.error(f"No images found in '{SOURCE_DIR}'. Please add photos to analyze.")
         return
 
-    for i, image_path in enumerate(image_paths):
-        logging.info(f"Processing image {i + 1}/{len(image_paths)}: {os.path.basename(image_path)}")
+    for image_path in tqdm(image_paths, desc="Finding Faces (eps analysis)"):
         try:
             image = face_recognition.load_image_file(image_path)
-            # We don't need to resize here, as we only need the encodings once.
             locations = face_recognition.face_locations(image, model=DETECTOR_MODEL)
             found_encodings = face_recognition.face_encodings(image, locations)
             encodings.extend(found_encodings)
         except Exception as e:
-            logging.warning(f"  Skipping {os.path.basename(image_path)} due to error: {e}")
+            # We can use tqdm.write to print messages without breaking the progress bar
+            tqdm.write(f"Warning: Skipping {os.path.basename(image_path)} due to error: {e}")
 
     if len(encodings) < 2:
         logging.error("Not enough faces found to perform analysis. Need at least 2.")

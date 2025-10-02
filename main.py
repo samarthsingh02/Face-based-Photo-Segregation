@@ -5,43 +5,47 @@ import logging
 import json
 import cv2
 import yaml
-
 import face_recognition
 import numpy as np
+
 from sklearn.cluster import DBSCAN
 from sklearn.metrics.cluster import homogeneity_score, completeness_score, v_measure_score
+from collections import Counter
+from tqdm import tqdm
 
 # --- Load Configuration ---
-# This block now correctly loads all settings from the YAML file.
 try:
     with open('config.yaml', 'r') as f:
         config = yaml.safe_load(f)
 
-    # Directory Paths
+    # 1. Get the name of the active preset
+    active_model_name = config['active_model']
+
+    # 2. Load the settings from that specific preset
+    preset_settings = config['presets'][active_model_name]
+
+    DETECTOR_MODEL = preset_settings['detector']
+    EPS_VALUE = preset_settings['eps']
+    RESIZE_WIDTH = preset_settings['resize_width']
+
+    # 3. Load the general settings from their correct locations
     SOURCE_DIR = config['directory_paths']['source']
     OUTPUT_DIR = config['directory_paths']['output']
     LOG_FILE = config['directory_paths']['log_file']
     GROUND_TRUTH_FILE = config['directory_paths']['ground_truth']
 
-    # Model Parameters
-    DETECTOR_MODEL = config['model_parameters']['detector']
-    EPS_VALUE = config['model_parameters']['clustering']['eps']
-    MIN_SAMPLES = config['model_parameters']['clustering']['min_samples']
+    MIN_SAMPLES = config['clustering_settings']['min_samples']
 
-    # Processing Settings
-    RESIZE_WIDTH = config['processing_settings']['resize_width']
-
-    # Output Settings
     FOLDER_PREFIX = config['output_settings']['folder_prefix']
     UNKNOWNS_FOLDER = config['output_settings']['unknowns_folder']
 
 except FileNotFoundError:
-    print(f"CRITICAL: config.yaml not found. Please ensure it exists.")
+    # We use print here because the logger might not be initialized yet
+    print("CRITICAL ERROR: config.yaml not found. Please ensure it exists in the project directory.")
     exit()
 except KeyError as e:
-    print(f"CRITICAL: Missing or incorrect key in config.yaml: {e}")
+    print(f"CRITICAL ERROR: Missing or incorrect key in config.yaml. Please check your file. Error: {e}")
     exit()
-
 
 # --- Logger Configuration ---
 def init_logging():
@@ -56,10 +60,14 @@ def init_logging():
     )
 
 
-# --- Phase 1: Data Ingestion & Feature Extraction ---
 def process_images():
+    """
+    Scans the source directory, resizes images, finds faces, and extracts encodings,
+    displaying a progress bar using tqdm.
+    """
     logging.info("Starting image processing...")
     all_face_data = []
+
     image_paths = []
     for root, dirs, files in os.walk(SOURCE_DIR):
         for file in files:
@@ -71,30 +79,41 @@ def process_images():
         return None, 0, 0
 
     total_faces_found = 0
-    for i, image_path in enumerate(image_paths):
-        logging.info(f"Processing image {i + 1}/{len(image_paths)}: {os.path.basename(image_path)}")
+
+    # --- CHANGE: The main loop is now wrapped in tqdm ---
+    for image_path in tqdm(image_paths, desc="Processing Images"):
+        # --- REMOVED: The old per-image logging message is no longer needed ---
         try:
             image = cv2.imread(image_path)
+
+            # Added a check for corrupted images that OpenCV can't open
+            if image is None:
+                tqdm.write(f"Warning: Skipping corrupted or unreadable image: {os.path.basename(image_path)}")
+                continue
+
             (h, w) = image.shape[:2]
 
-            # Use RESIZE_WIDTH from config
             if w > RESIZE_WIDTH:
                 r = float(RESIZE_WIDTH) / w
                 dim = (RESIZE_WIDTH, int(h * r))
                 image = cv2.resize(image, dim, interpolation=cv2.INTER_AREA)
-                logging.info(f"  Resized large image to {dim[0]}x{dim[1]}")
 
             rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             locations = face_recognition.face_locations(rgb_image, model=DETECTOR_MODEL)
-            logging.info(f"  Found {len(locations)} face(s) using '{DETECTOR_MODEL}' model.")
             total_faces_found += len(locations)
             encodings = face_recognition.face_encodings(rgb_image, locations)
+
             for encoding in encodings:
                 all_face_data.append({'image_path': image_path, 'encoding': encoding})
-        except Exception as e:
-            logging.error(f"  Could not process {os.path.basename(image_path)}. Error: {e}")
 
+        except Exception as e:
+            # Use tqdm.write() to print messages without breaking the progress bar
+            tqdm.write(f"ERROR: Could not process {os.path.basename(image_path)}. Error: {e}")
+
+    # Log a final summary after the loop is complete
+    logging.info(f"Completed processing. Found a total of {total_faces_found} faces in {len(image_paths)} images.")
     return all_face_data, len(image_paths), total_faces_found
+
 
 # --- Phase 2: Clustering & Analysis ---
 def cluster_faces(all_face_data):
@@ -147,46 +166,82 @@ def organize_files(all_face_data):
 # --- Evaluation Functions ---
 def calculate_clustering_metrics(all_face_data):
     """
-    Calculates and formats clustering quality metrics by comparing DBSCAN results
-    to the ground truth derived from the folder structure.
+    Calculates a comprehensive clustering report, separating metrics for single-person
+    photos from an analysis of group photos.
     """
     if not all_face_data:
         logging.warning("Cannot calculate metrics: No face data provided.")
         return "\n    No face data to calculate metrics."
 
-    # 1. Derive ground truth labels from the directory structure.
-    # Assumes a structure like: .../source_images/Person_Name/image.jpg
-    true_labels = [os.path.basename(os.path.dirname(data['image_path'])) for data in all_face_data]
-    predicted_labels = [data['cluster_id'] for data in all_face_data]
+    # --- 1. Separate single-person data from group photo data ---
+    single_person_data = []
+    group_photo_data = []
+    for data in all_face_data:
+        # Assumes group photos are in a folder starting with '_' (e.g., _group_photos)
+        if os.path.basename(os.path.dirname(data['image_path'])).startswith('_'):
+            group_photo_data.append(data)
+        else:
+            single_person_data.append(data)
 
-    # 2. Check if the ground truth is meaningful for clustering evaluation.
-    # Metrics are only useful if there are at least two different people to compare.
-    unique_true_labels = set(true_labels)
-    if len(unique_true_labels) < 2:
-        logging.warning(f"Cannot calculate meaningful metrics. Only found {len(unique_true_labels)} unique source folder(s).")
-        report = f"""
-    ----------------- CLUSTERING METRICS -----------------
-    - Status: Not Calculated
-    - Reason: Meaningful metrics require at least two distinct
-              people (source folders) to compare against.
-    ------------------------------------------------------
-        """
-        return report
+    if not single_person_data:
+        return "\n    No single-person photos found to calculate metrics."
 
-    # 3. Calculate the standard clustering metrics.
+    # --- 2. Calculate metrics ONLY on single-person photos ---
+    true_labels = [os.path.basename(os.path.dirname(data['image_path'])) for data in single_person_data]
+    predicted_labels = [data['cluster_id'] for data in single_person_data]
+
+    if len(set(true_labels)) < 2:
+        # ... (error handling for < 2 unique labels remains the same) ...
+        return "\n    Metrics not calculated: Need at least two source folders of single people."
+
     homogeneity = homogeneity_score(true_labels, predicted_labels)
     completeness = completeness_score(true_labels, predicted_labels)
     v_measure = v_measure_score(true_labels, predicted_labels)
 
-    # 4. Build a more descriptive and clearly ordered report.
+    # --- 3. Create a cluster-to-name map based on the clean, single-person data ---
+    cluster_to_name_map = {}
+    unique_predicted_labels = set(predicted_labels)
+    for cluster_id in unique_predicted_labels:
+        if cluster_id == -1: continue
+        names_in_cluster = [true_labels[i] for i, pred_label in enumerate(predicted_labels) if pred_label == cluster_id]
+        if names_in_cluster:
+            winner_name = Counter(names_in_cluster).most_common(1)[0][0]
+            cluster_to_name_map[cluster_id] = winner_name
+
+    # --- 4. Identify mismatches ONLY for single-person photos ---
+    mismatches = []
+    for i, data in enumerate(single_person_data):
+        true_name = true_labels[i]
+        cluster_id = predicted_labels[i]
+        predicted_name = cluster_to_name_map.get(cluster_id, "Unknown")
+        if predicted_name != true_name:
+            filename = os.path.basename(data['image_path'])
+            mismatches.append(f"  - FAILED: '{filename}' (True: {true_name}) was predicted as '{predicted_name}'")
+
+    # --- 5. Analyze the group photos separately ---
+    group_photo_summary = []
+    if group_photo_data:
+        group_predictions = [cluster_to_name_map.get(data['cluster_id'], "Unknown") for data in group_photo_data]
+        group_counts = Counter(group_predictions)
+        group_photo_summary.append("\n- Group Photo Analysis:")
+        for name, count in group_counts.items():
+            group_photo_summary.append(f"  - Identified {count} face(s) as '{name}'")
+
+    # --- 6. Build the final, combined report ---
     report_lines = [
         "\n",
-        "----------------- CLUSTERING METRICS -----------------",
-        f"- V-Measure   : {v_measure:.4f} (The overall balanced score)",
-        f"- Homogeneity : {homogeneity:.4f} (Measures if each cluster contains only one person)",
-        f"- Completeness: {completeness:.4f} (Measures if all photos of a person are in one cluster)",
-        "------------------------------------------------------"
+        "----------------- CLUSTERING METRICS (Single Photos Only) -----------------",
+        f"- V-Measure   : {v_measure:.4f} (Overall balanced score)",
+        f"- Homogeneity : {homogeneity:.4f} (Purity of clusters)",
+        f"- Completeness: {completeness:.4f} (Correctness of clusters)",
+        "\n- Cluster to Name Mapping:",
+        f"  - {cluster_to_name_map}",
+        "\n- Mismatches (Single Photos Only):",
     ]
+    report_lines.extend(mismatches if mismatches else ["  - None. Great job!"])
+    report_lines.extend(group_photo_summary)
+    report_lines.append("-----------------------------------------------------------------")
+
     return "\n".join(report_lines)
 
 # --- Logging Summary ---
@@ -198,6 +253,7 @@ def log_run_summary(stats):
     - Timestamp           : {stats['timestamp']}
     - Detector Model      : {stats['detector_model']}
     - DBSCAN eps          : {stats['eps_value']}
+    - Resize Width        : {stats['resize_width']} px
     - Images Processed    : {stats['images_processed']}
     - Faces Detected      : {stats['faces_detected']}
     - People Found        : {stats['people_found']}
@@ -216,7 +272,8 @@ if __name__ == "__main__":
     run_stats = {
         "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
         "detector_model": DETECTOR_MODEL,
-        "eps_value": EPS_VALUE
+        "eps_value": EPS_VALUE,
+        "resize_width": RESIZE_WIDTH
     }
 
     logging.info(f"-- Starting New Run --")
