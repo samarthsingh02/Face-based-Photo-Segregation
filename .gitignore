@@ -22,7 +22,10 @@ Thumbs.db
 # Ignore all files within the source and output directories...
 source_images/*
 output_sorted/*
+source_images_subset/*
 
 # ...but DO NOT ignore the placeholder files inside them!
 !source_images/.gitkeep
 !output_sorted/.gitkeep
+
+*.png
