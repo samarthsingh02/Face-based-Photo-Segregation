@@ -1,4 +1,4 @@
-active_model: cnn_accurate
+active_model: hog_fast
 presets:
   hog_fast:
     detector: hog
@@ -6,8 +6,8 @@ presets:
     resize_width: 450
   cnn_accurate:
     detector: cnn
-    eps: 0.375
-    resize_width: 1000
+    eps: 0.42
+    resize_width: 800
 directory_paths:
   source: source_images
   output: output_sorted

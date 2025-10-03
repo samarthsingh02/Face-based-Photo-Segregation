@@ -11,7 +11,7 @@ import cv2  # <-- 1. IMPORT CV2
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 # --- Configuration ---
-SOURCE_DIR = "source_images_subset"  # Using the small subset for speed
+SOURCE_DIR = "source_images"  # Using the small subset for speed
 DETECTOR_MODEL = "cnn"
 RESIZE_WIDTH = 400  # <-- 2. ADD RESIZE_WIDTH (using a fast value)
 
