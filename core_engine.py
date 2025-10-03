@@ -9,77 +9,56 @@ import face_recognition
 import numpy as np
 from sklearn.cluster import DBSCAN
 from sklearn.metrics.cluster import homogeneity_score, completeness_score, v_measure_score
+import database
+
+# In core_engine.py
+import database  # <-- Make sure this is imported at the top
 
 
-def process_images(source_dir, resize_width, detector_model):
+def process_images(source_dir, resize_width, detector_model, existing_paths=set()):
     """
-    Scans a directory recursively, resizes large images for performance,
-    finds all faces using the specified model, and extracts their 128-d encodings.
-
-    Args:
-        source_dir (str): The path to the root directory of images to process.
-        resize_width (int): The width to resize large images to.
-        detector_model (str): The model to use for face detection ('hog' or 'cnn').
-
-    Returns:
-        tuple: A tuple containing (all_face_data, image_count, face_count).
-               Returns (None, 0, 0) if no images are found.
+    Scans a directory for images, skipping any paths provided in existing_paths.
     """
-    logging.info("Starting image processing...")
-    all_face_data = []
-
-    # 1. Image Discovery: Recursively find all image files in the source directory.
-    image_paths = []
+    logging.info(f"Discovering new images (skipping {len(existing_paths)} already processed)...")
+    new_image_paths = []
     for root, dirs, files in os.walk(source_dir):
         for file in files:
             if file.lower().endswith(('.png', '.jpg', '.jpeg')):
-                image_paths.append(os.path.join(root, file))
+                full_path = os.path.join(root, file)
+                if full_path not in existing_paths: # <-- The key change is here
+                    new_image_paths.append(full_path)
 
-    # Early exit if no images are found.
-    if not image_paths:
-        logging.warning(f"No images found in the '{source_dir}' directory.")
+    if not new_image_paths:
+        logging.warning(f"No new images found in '{source_dir}' to process.")
         return None, 0, 0
 
+    logging.info(f"Starting processing for {len(new_image_paths)} new images...")
+    all_face_data = []
     total_faces_found = 0
-    # 2. Main Processing Loop: Iterate through each image with a progress bar.
-    for image_path in tqdm(image_paths, desc="Processing Images"):
+
+    for image_path in tqdm(new_image_paths, desc="Processing New Images"):
+        # ... (the rest of the loop remains exactly the same as before) ...
         try:
-            # 3. Load & Resize: Load with OpenCV for efficient resizing.
             image = cv2.imread(image_path)
             if image is None:
-                tqdm.write(f"Warning: Skipping corrupted or unreadable image: {os.path.basename(image_path)}")
+                tqdm.write(f"Warning: Skipping corrupted image: {os.path.basename(image_path)}")
                 continue
-
             (h, w) = image.shape[:2]
-
-            # If the image width is greater than the configured threshold, resize it.
             if w > resize_width:
-                # Calculate the ratio to maintain the aspect ratio.
                 r = float(resize_width) / w
                 dim = (resize_width, int(h * r))
                 image = cv2.resize(image, dim, interpolation=cv2.INTER_AREA)
-
-            # 4. Color Conversion: Convert from OpenCV's BGR format to face_recognition's RGB format.
             rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-            # 5. Face Detection: Find the coordinates of all faces in the (potentially resized) image.
             locations = face_recognition.face_locations(rgb_image, model=detector_model)
             total_faces_found += len(locations)
-
-            # 6. Feature Extraction: Generate the 128-number "fingerprint" for each face found.
             encodings = face_recognition.face_encodings(rgb_image, locations)
-
-            # 7. Data Aggregation: Store the results for each face in a master list.
             for encoding in encodings:
                 all_face_data.append({'image_path': image_path, 'encoding': encoding})
-
         except Exception as e:
-            # Catch any errors during processing to prevent the whole script from crashing.
             tqdm.write(f"ERROR: Could not process {os.path.basename(image_path)}. Error: {e}")
 
-    # 8. Final Summary: Log the total counts after the loop is complete.
-    logging.info(f"Completed processing. Found a total of {total_faces_found} faces in {len(image_paths)} images.")
-    return all_face_data, len(image_paths), total_faces_found
+    logging.info(f"Completed processing. Found {total_faces_found} new faces in {len(new_image_paths)} images.")
+    return all_face_data, len(new_image_paths), total_faces_found
 
 
 def cluster_faces(all_face_data, eps, min_samples):

@@ -29,3 +29,6 @@ source_images_subset/*
 !output_sorted/.gitkeep
 
 *.png
+
+# Database files
+*.db

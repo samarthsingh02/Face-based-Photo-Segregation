@@ -6,6 +6,7 @@ import shutil
 
 # The only major import should be your own engine!
 import core_engine
+import database
 
 # --- Configuration Loading ---
 # We load the config at the global level so all functions can see the constants.
@@ -71,7 +72,9 @@ def log_run_summary(stats):
 
 def main():
     """Main function to orchestrate the face sorting process."""
+    # 1. Initialization
     init_logging(LOG_FILE)
+    database.init_db()
     start_time = time.time()
 
     run_stats = {
@@ -84,21 +87,35 @@ def main():
     logging.info(f"-- Starting New Run --")
     logging.info(f"Using preset: '{active_model_name}'")
 
-    # Clean up output directory
-    if os.path.exists(OUTPUT_DIR):
-        shutil.rmtree(OUTPUT_DIR)
-    os.makedirs(OUTPUT_DIR)
+    # 2. Load existing data & process new data
+    existing_faces = database.get_faces_by_model(active_model_name)
+    processed_paths = {face['image_path'] for face in existing_faces}
 
-    # --- Call the functions from your core_engine ---
-    face_data, img_count, face_count = core_engine.process_images(
-        SOURCE_DIR, RESIZE_WIDTH, DETECTOR_MODEL
+    # This call now correctly gets only the NEW images
+    new_faces, img_count, face_count = core_engine.process_images(
+        SOURCE_DIR, RESIZE_WIDTH, DETECTOR_MODEL, existing_paths=processed_paths
     )
+
+    # 3. Combine old data from the DB with newly processed data
+    all_face_data = existing_faces + (new_faces or [])
+
+    # 4. Save only the newly processed faces back to the database
+    if new_faces:
+        database.add_faces(new_faces, active_model_name)
+
+    # 5. Update stats with ONLY the work done in this specific run
     run_stats["images_processed"] = img_count
     run_stats["faces_detected"] = face_count
 
-    if face_data:
+    # 6. Cluster, sort, and report on the FULL (combined) dataset
+    if all_face_data:
+        # Clear output directory just before organizing files
+        if os.path.exists(OUTPUT_DIR):
+            shutil.rmtree(OUTPUT_DIR)
+        os.makedirs(OUTPUT_DIR)
+
         clustered_data, people_count, unknown_count = core_engine.cluster_faces(
-            face_data, EPS_VALUE, MIN_SAMPLES
+            all_face_data, EPS_VALUE, MIN_SAMPLES
         )
         run_stats["people_found"] = people_count
         run_stats["unknown_faces"] = unknown_count
@@ -110,11 +127,11 @@ def main():
     else:
         run_stats["people_found"] = 0
         run_stats["unknown_faces"] = 0
-        run_stats["clustering_report"] = "No faces processed."
+        run_stats["clustering_report"] = "No faces found in source or database."
 
+    # 7. Finalize and log the summary
     end_time = time.time()
     run_stats["execution_time"] = end_time - start_time
-
     log_run_summary(run_stats)
 
 
