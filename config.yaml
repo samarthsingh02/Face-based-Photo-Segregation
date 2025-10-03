@@ -1,20 +1,34 @@
-active_model: cnn_accurate
+active_model: dlib_hog
 presets:
-  hog_fast:
-    detector: hog
-    eps: 0.45
+  dlib_hog:
+    library: dlib
+    model: hog
     resize_width: 450
-  cnn_accurate:
-    detector: cnn
-    eps: 0.42
+    clustering:
+      eps: 0.45
+      metric: euclidean
+      min_samples: 2
+  dlib_cnn:
+    library: dlib
+    model: cnn
     resize_width: 800
+    clustering:
+      eps: 0.42
+      metric: euclidean
+      min_samples: 2
+  deepface_vgg:
+    library: deepface
+    embedding_model: VGG-Face
+    detector: retinaface
+    clustering:
+      eps: 0.45
+      min_samples: 2
+      metric: cosine
 directory_paths:
   source: source_images
   output: output_sorted
   log_file: run_log.txt
   ground_truth: ground_truth.json
-clustering_settings:
-  min_samples: 2
 output_settings:
   folder_prefix: Person_
   unknowns_folder: Unknowns

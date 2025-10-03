@@ -6,93 +6,116 @@ from tqdm import tqdm
 from collections import Counter
 
 import face_recognition
+from deepface import DeepFace
 import numpy as np
 from sklearn.cluster import DBSCAN
 from sklearn.metrics.cluster import homogeneity_score, completeness_score, v_measure_score
-import database
 
-# In core_engine.py
-import database  # <-- Make sure this is imported at the top
+# --- Embedding Helper Functions ---
 
+def _get_dlib_encodings(image, locations):
+    """Generates embeddings using the face_recognition (dlib) library."""
+    return face_recognition.face_encodings(image, locations)
 
-def process_images(source_dir, resize_width, detector_model, existing_paths=set()):
+def _get_deepface_encodings(image_path, model_name, detector_backend):
     """
-    Scans a directory for images, skipping any paths provided in existing_paths.
+    Generates embeddings using the DeepFace library, letting it handle detection.
+    """
+    # Let DeepFace handle both detection and embedding generation for consistency
+    embedding_objs = DeepFace.represent(
+        img_path=image_path,
+        model_name=model_name,
+        detector_backend=detector_backend,
+        enforce_detection=True  # Ensure it finds at least one face
+    )
+    # Extract the embedding vector from the result dictionary
+    return [obj['embedding'] for obj in embedding_objs]
+
+# --- Main Engine Functions ---
+
+def process_images(source_dir, preset_settings, existing_paths=set()):
+    """
+    Scans for new images and generates face embeddings using the library
+    specified in the preset_settings.
     """
     logging.info(f"Discovering new images (skipping {len(existing_paths)} already processed)...")
+
+    # --- THIS BLOCK WAS MISSING ---
     new_image_paths = []
     for root, dirs, files in os.walk(source_dir):
         for file in files:
             if file.lower().endswith(('.png', '.jpg', '.jpeg')):
                 full_path = os.path.join(root, file)
-                if full_path not in existing_paths: # <-- The key change is here
+                if full_path not in existing_paths:
                     new_image_paths.append(full_path)
 
     if not new_image_paths:
-        logging.warning(f"No new images found in '{source_dir}' to process.")
+        logging.warning("No new images found to process.")
         return None, 0, 0
+    # --- END OF MISSING BLOCK ---
 
     logging.info(f"Starting processing for {len(new_image_paths)} new images...")
     all_face_data = []
     total_faces_found = 0
 
+    resize_width = preset_settings['resize_width']
+
     for image_path in tqdm(new_image_paths, desc="Processing New Images"):
-        # ... (the rest of the loop remains exactly the same as before) ...
         try:
-            image = cv2.imread(image_path)
-            if image is None:
-                tqdm.write(f"Warning: Skipping corrupted image: {os.path.basename(image_path)}")
-                continue
-            (h, w) = image.shape[:2]
-            if w > resize_width:
-                r = float(resize_width) / w
-                dim = (resize_width, int(h * r))
-                image = cv2.resize(image, dim, interpolation=cv2.INTER_AREA)
-            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            locations = face_recognition.face_locations(rgb_image, model=detector_model)
-            total_faces_found += len(locations)
-            encodings = face_recognition.face_encodings(rgb_image, locations)
+            encodings = []
+            if preset_settings['library'] == 'dlib':
+                # Dlib logic: resize, detect, then encode
+                image = cv2.imread(image_path)
+                if image is None:
+                    tqdm.write(f"Warning: Skipping corrupted image: {os.path.basename(image_path)}")
+                    continue
+
+                (h, w) = image.shape[:2]
+                if w > resize_width:
+                    r = float(resize_width) / w
+                    dim = (resize_width, int(h * r))
+                    image = cv2.resize(image, dim, interpolation=cv2.INTER_AREA)
+
+                rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                locations = face_recognition.face_locations(rgb_image, model=preset_settings['model'])
+                total_faces_found += len(locations)
+                encodings = _get_dlib_encodings(rgb_image, locations)
+
+            elif preset_settings['library'] == 'deepface':
+                # DeepFace logic: Pass the original path and let it handle everything
+                encodings = _get_deepface_encodings(image_path, preset_settings['embedding_model'],
+                                                    preset_settings['detector'])
+                total_faces_found += len(encodings)
+
             for encoding in encodings:
                 all_face_data.append({'image_path': image_path, 'encoding': encoding})
+
         except Exception as e:
             tqdm.write(f"ERROR: Could not process {os.path.basename(image_path)}. Error: {e}")
 
     logging.info(f"Completed processing. Found {total_faces_found} new faces in {len(new_image_paths)} images.")
     return all_face_data, len(new_image_paths), total_faces_found
 
-
-def cluster_faces(all_face_data, eps, min_samples):
+def cluster_faces(all_face_data, preset_settings):
     """
-    Groups face encodings into clusters using the DBSCAN algorithm.
-
-    Args:
-        all_face_data (list): The master list of face data from process_images.
-        eps (float): The maximum distance between two samples for one to be
-                     considered as in the neighborhood of the other.
-        min_samples (int): The number of samples in a neighborhood for a point
-                           to be considered as a core point.
-
-    Returns:
-        tuple: A tuple containing (updated_face_data, num_people, num_unknowns).
-               Returns (None, 0, 0) if no data is provided.
+    Groups face encodings into clusters using settings from the preset.
     """
-    # 1. Early exit if there are no faces to cluster.
     if not all_face_data:
         logging.warning("No faces were detected to cluster.")
         return None, 0, 0
 
-    logging.info("Starting face clustering...")
+    # Extract clustering parameters from the preset
+    cluster_settings = preset_settings['clustering']
+    eps = cluster_settings['eps']
+    min_samples = cluster_settings['min_samples']
+    metric = cluster_settings['metric']
 
-    # 2. Data Preparation: Extract all 128-d face encodings into a NumPy array.
-    # This is the format required by scikit-learn's clustering algorithms.
+    logging.info(f"Starting face clustering using '{metric}' metric...")
     encodings = np.array([data['encoding'] for data in all_face_data])
 
-    # 3. Initialize and run the DBSCAN clustering algorithm.
-    # `eps` and `min_samples` are the two key parameters that control the clustering.
-    logging.info(f"Running DBSCAN with eps={eps} and min_samples={min_samples}...")
-    clt = DBSCAN(metric="euclidean", eps=eps, min_samples=min_samples)
-    # The .fit() method performs the actual grouping on the encoding data.
+    clt = DBSCAN(metric=metric, eps=eps, min_samples=min_samples)
     clt.fit(encodings)
+
 
     # 4. Calculate summary statistics from the clustering results.
     # The algorithm returns a list of labels (clt.labels_).
