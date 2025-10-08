@@ -39,11 +39,19 @@ def run_face_processing_job(job_id, image_folder, preset_name):
             config = yaml.safe_load(f)
         preset_settings = config['presets'][preset_name]
 
+        def update_progress(current, total):
+            JOBS[job_id]['progress'] = int((current / total) * 100)
+
+
         # Use the correct engine function based on the preset library
         if preset_settings['library'] == 'dlib':
-            face_data, _, _ = core_engine.process_images_dlib(image_folder, preset_settings, existing_paths=set())
+            face_data, _, _ = core_engine.process_images_dlib(
+                image_folder, preset_settings, existing_paths=set(), progress_callback=update_progress
+            )
         elif preset_settings['library'] == 'deepface':
-            face_data, _, _ = core_engine.process_images_deepface(image_folder, preset_settings, existing_paths=set())
+            face_data, _, _ = core_engine.process_images_deepface(
+                image_folder, preset_settings, existing_paths=set(), progress_callback=update_progress
+            )
         else:
             raise ValueError(f"Unknown library in preset: {preset_settings['library']}")
 
@@ -89,7 +97,7 @@ def process_images_endpoint():
         file.save(os.path.join(job_folder, file.filename))
 
     # NEW: Initialize the job status in the JOBS dictionary
-    JOBS[job_id] = {'status': 'processing', 'result': None}
+    JOBS[job_id] = {'status': 'processing', 'progress': 0, 'result': None}
 
     # Start the background thread
     thread = threading.Thread(target=run_face_processing_job, args=(job_id, job_folder, "dlib_hog"))

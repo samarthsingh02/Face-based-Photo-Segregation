@@ -16,7 +16,7 @@ from sklearn.preprocessing import normalize
 
 # NOTE: NO face_recognition or deepface imports here.
 
-def process_images_dlib(source_dir, preset_settings, existing_paths=set()):
+def process_images_dlib(source_dir, preset_settings, existing_paths=set(), progress_callback=None):
     """
     Scans for new images and generates face embeddings using the dlib library.
     """
@@ -40,7 +40,7 @@ def process_images_dlib(source_dir, preset_settings, existing_paths=set()):
     total_faces_found = 0
     resize_width = preset_settings['resize_width']
 
-    for image_path in tqdm(new_image_paths, desc="Processing (dlib)"):
+    for i, image_path in enumerate(tqdm(new_image_paths, desc="Processing (dlib)")):
         try:
             image = cv2.imread(image_path)
             if image is None: continue
@@ -60,11 +60,15 @@ def process_images_dlib(source_dir, preset_settings, existing_paths=set()):
         except Exception as e:
             tqdm.write(f"ERROR processing {os.path.basename(image_path)} with dlib: {e}")
 
+        if progress_callback:
+            progress_callback(i + 1, len(new_image_paths))
+
+
     logging.info(f"Completed dlib processing. Found {total_faces_found} new faces.")
     return all_face_data, len(new_image_paths), total_faces_found
 
 
-def process_images_deepface(source_dir, preset_settings, existing_paths=set()):
+def process_images_deepface(source_dir, preset_settings, existing_paths=set(), progress_callback=None):
     """
     Scans for new images and generates L2-NORMALIZED face embeddings
     using the DeepFace library.
@@ -93,7 +97,7 @@ def process_images_deepface(source_dir, preset_settings, existing_paths=set()):
     # Pre-build model once for efficiency within this function call
     DeepFace.build_model(model_name)
 
-    for image_path in tqdm(new_image_paths, desc="Processing (DeepFace)"):
+    for i, image_path in enumerate(tqdm(new_image_paths, desc="Processing (DeepFace)")):
         try:
             embedding_objs = DeepFace.represent(
                 img_path=image_path, model_name=model_name,
@@ -109,6 +113,10 @@ def process_images_deepface(source_dir, preset_settings, existing_paths=set()):
                 all_face_data.append({'image_path': image_path, 'encoding': encoding})
         except Exception as e:
             tqdm.write(f"ERROR processing {os.path.basename(image_path)} with DeepFace: {e}")
+
+        if progress_callback:
+            progress_callback(i + 1, len(new_image_paths))
+
 
     logging.info(f"Completed DeepFace processing. Found {total_faces_found} new faces.")
     return all_face_data, len(new_image_paths), total_faces_found

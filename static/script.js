@@ -1,14 +1,16 @@
 document.addEventListener('DOMContentLoaded', () => {
+    // --- Get all the HTML elements we need ---
     const dropZone = document.getElementById('drop-zone');
     const photoInput = document.getElementById('photo-input');
     const uploadButton = document.getElementById('upload-button');
-    const statusArea = document.getElementById('status-area');
+    const statusText = document.getElementById('status-text');
+    const progressBar = document.getElementById('progress-bar');
     const previewArea = document.getElementById('preview-area');
     const resultsArea = document.getElementById('results-area');
 
-    let selectedFiles = [];
+    let selectedFiles = []; // This will store the files to be uploaded
 
-    // --- Drag and Drop Logic ---
+    // --- Drag & Drop and File Selection Logic ---
     dropZone.addEventListener('click', () => photoInput.click());
     dropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
@@ -18,21 +20,23 @@ document.addEventListener('DOMContentLoaded', () => {
     dropZone.addEventListener('drop', (e) => {
         e.preventDefault();
         dropZone.classList.remove('dragover');
-        const files = e.dataTransfer.files;
-        handleFiles(files);
+        handleFiles(e.dataTransfer.files);
     });
     photoInput.addEventListener('change', () => handleFiles(photoInput.files));
 
     function handleFiles(files) {
-        selectedFiles = [...files]; // Convert FileList to an array
-        previewArea.innerHTML = ''; // Clear old previews
+        selectedFiles = [...files];
+        previewArea.innerHTML = '';
+        resultsArea.innerHTML = '<p>Your sorted photos will appear here.</p>'; // Reset results on new selection
+
         if (selectedFiles.length === 0) {
             uploadButton.disabled = true;
+            statusText.innerText = '';
             return;
         }
 
         uploadButton.disabled = false;
-        statusArea.innerText = `${selectedFiles.length} file(s) selected. Ready to process.`;
+        statusText.innerText = `${selectedFiles.length} file(s) selected. Ready to process.`;
 
         // Generate image previews
         for (const file of selectedFiles) {
@@ -47,17 +51,18 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-
+    // --- Upload Logic ---
     uploadButton.addEventListener('click', async () => {
-        const files = photoInput.files;
-        if (files.length === 0) {
-            statusArea.innerText = 'Please select some photos first.';
+        if (selectedFiles.length === 0) {
+            statusText.innerText = 'Please select some photos first.';
             return;
         }
 
-        statusArea.innerText = 'Uploading photos...';
+        statusText.innerText = 'Uploading photos...';
+        uploadButton.disabled = true;
+
         const formData = new FormData();
-        for (const file of files) {
+        for (const file of selectedFiles) {
             formData.append('photos', file);
         }
 
@@ -69,68 +74,79 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await response.json();
 
             if (response.ok) {
-                statusArea.innerText = `Processing started! Checking status...`;
-                // Start polling for the job status
-                pollJobStatus(data.job_id);
+                pollJobStatus(data.job_id); // Start checking the job status
             } else {
-                statusArea.innerText = `Error: ${data.error}`;
+                statusText.innerText = `Error: ${data.error}`;
+                uploadButton.disabled = false;
             }
         } catch (error) {
-            statusArea.innerText = `An error occurred: ${error}`;
+            statusText.innerText = `An error occurred: ${error}`;
+            uploadButton.disabled = false;
         }
     });
 
+    // --- Polling and Display Logic ---
     const pollJobStatus = (jobId) => {
-        const interval = setInterval(async () => {
-            const response = await fetch(`/api/status/${jobId}`);
-            const data = await response.json();
+        progressBar.style.display = 'block';
+        statusText.innerText = 'Processing... 0%';
 
-            if (data.status === 'complete') {
+        const interval = setInterval(async () => {
+            try {
+                const response = await fetch(`/api/status/${jobId}`);
+                const data = await response.json();
+
+                if (data.progress !== undefined) {
+                    progressBar.value = data.progress;
+                    statusText.innerText = `Processing... ${data.progress}%`;
+                }
+
+                if (data.status === 'complete') {
+                    clearInterval(interval);
+                    progressBar.value = 100;
+                    statusText.innerText = 'Processing complete! Displaying results.';
+                    displayResults(data.result);
+                    uploadButton.disabled = false;
+                } else if (data.status === 'failed') {
+                    clearInterval(interval);
+                    statusText.innerText = `Job failed: ${data.error}`;
+                    uploadButton.disabled = false;
+                }
+            } catch (error) {
                 clearInterval(interval);
-                statusArea.innerText = 'Processing complete! Displaying results.';
-                displayResults(data.result);
-            } else if (data.status === 'failed') {
-                clearInterval(interval);
-                statusArea.innerText = `Job failed: ${data.error}`;
-            } else {
-                statusArea.innerText = 'Still processing... Please wait.';
+                statusText.innerText = 'Error checking status.';
+                uploadButton.disabled = false;
             }
-        }, 3000); // Check every 3 seconds
+        }, 2000); // Check every 2 seconds
     };
 
     const displayResults = (results) => {
-        resultsArea.innerHTML = ''; // Clear the results area
-
-        // Group images by cluster ID
+        resultsArea.innerHTML = '';
         const clusters = {};
+        if (!results || typeof results === 'string') {
+            resultsArea.innerText = results || 'No results to display.';
+            return;
+        }
         for (const face of results) {
             if (!clusters[face.cluster_id]) {
                 clusters[face.cluster_id] = [];
             }
-            // Avoid adding duplicate images to a cluster
             if (!clusters[face.cluster_id].includes(face.image_url)) {
                  clusters[face.cluster_id].push(face.image_url);
             }
         }
-
-        // Create HTML for each cluster
         for (const clusterId in clusters) {
             const clusterDiv = document.createElement('div');
-            clusterDiv.className = 'cluster';
-
             const title = document.createElement('h4');
             title.innerText = clusterId === '-1' ? 'Unknowns' : `Person ${parseInt(clusterId) + 1}`;
             clusterDiv.appendChild(title);
-
             const imageContainer = document.createElement('div');
-            imageContainer.className = 'image-container';
             clusters[clusterId].forEach(imageUrl => {
                 const img = document.createElement('img');
                 img.src = imageUrl;
-                img.width = 150; // Simple styling
+                img.style.width = '150px';
+                img.style.margin = '5px';
                 imageContainer.appendChild(img);
             });
-
             clusterDiv.appendChild(imageContainer);
             resultsArea.appendChild(clusterDiv);
         }
