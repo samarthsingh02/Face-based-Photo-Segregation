@@ -1,8 +1,52 @@
 document.addEventListener('DOMContentLoaded', () => {
+    const dropZone = document.getElementById('drop-zone');
     const photoInput = document.getElementById('photo-input');
     const uploadButton = document.getElementById('upload-button');
     const statusArea = document.getElementById('status-area');
+    const previewArea = document.getElementById('preview-area');
     const resultsArea = document.getElementById('results-area');
+
+    let selectedFiles = [];
+
+    // --- Drag and Drop Logic ---
+    dropZone.addEventListener('click', () => photoInput.click());
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+    });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        const files = e.dataTransfer.files;
+        handleFiles(files);
+    });
+    photoInput.addEventListener('change', () => handleFiles(photoInput.files));
+
+    function handleFiles(files) {
+        selectedFiles = [...files]; // Convert FileList to an array
+        previewArea.innerHTML = ''; // Clear old previews
+        if (selectedFiles.length === 0) {
+            uploadButton.disabled = true;
+            return;
+        }
+
+        uploadButton.disabled = false;
+        statusArea.innerText = `${selectedFiles.length} file(s) selected. Ready to process.`;
+
+        // Generate image previews
+        for (const file of selectedFiles) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = document.createElement('img');
+                img.src = e.target.result;
+                img.title = file.name;
+                previewArea.appendChild(img);
+            };
+            reader.readAsDataURL(file);
+        }
+    }
+
 
     uploadButton.addEventListener('click', async () => {
         const files = photoInput.files;

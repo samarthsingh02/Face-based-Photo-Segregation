@@ -4,19 +4,42 @@
     <meta charset="UTF-8">
     <title>Face Sorter</title>
     <link rel="stylesheet" href="https://cdn.simplecss.org/simple.min.css">
+    <style>
+        #drop-zone {
+            border: 2px dashed #ccc;
+            border-radius: 10px;
+            padding: 25px;
+            text-align: center;
+            cursor: pointer;
+        }
+        #drop-zone.dragover {
+            background-color: #f0f8ff;
+            border-color: #007bff;
+        }
+        #preview-area img {
+            width: 100px;
+            height: 100px;
+            object-fit: cover;
+            margin: 5px;
+            border-radius: 5px;
+        }
+    </style>
 </head>
 <body>
     <header>
         <h1>Face Sorter Project</h1>
-        <p>Upload your photos and let the AI organize them by person.</p>
+        <p>Drag & drop your photos below or click to select them.</p>
     </header>
 
     <main>
-        <h3>1. Select Photos</h3>
-        <input type="file" id="photo-input" multiple accept="image/png, image/jpeg">
+        <div id="drop-zone">
+            <p>Drag & Drop Photos Here</p>
+            <input type="file" id="photo-input" multiple accept="image/png, image/jpeg" hidden>
+        </div>
 
-        <h3>2. Upload and Process</h3>
-        <button id="upload-button">Start Processing</button>
+        <div id="preview-area" style="margin-top: 20px;"></div>
+
+        <button id="upload-button" style="margin-top: 10px;" disabled>Start Processing</button>
 
         <div id="status-area" style="margin-top: 20px;"></div>
 
@@ -24,7 +47,7 @@
 
         <h3>Results</h3>
         <div id="results-area">
-            <p>Your sorted photos will appear here once processing is complete.</p>
+            <p>Your sorted photos will appear here.</p>
         </div>
     </main>
 
