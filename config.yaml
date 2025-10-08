@@ -1,4 +1,4 @@
-active_model: deepface_facenet
+active_model: dlib_hog
 presets:
   dlib_hog:
     library: dlib
