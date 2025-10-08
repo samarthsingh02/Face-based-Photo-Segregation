@@ -5,32 +5,23 @@ import time
 import yaml
 import logging
 import shutil
-
 import core_engine
 import database
 
-# --- Configuration Loading ---
-# We load the config at the global level so all functions can see the constants.
+# --- Load Configuration ---
 try:
     with open('config.yaml', 'r') as f:
         config = yaml.safe_load(f)
-
-    # Get active preset name and load its settings dictionary
     active_model_name = config['active_model']
     preset_settings = config['presets'][active_model_name]
-
-    # Load general settings
     SOURCE_DIR = config['directory_paths']['source']
     OUTPUT_DIR = config['directory_paths']['output']
     LOG_FILE = config['directory_paths']['log_file']
     FOLDER_PREFIX = config['output_settings']['folder_prefix']
     UNKNOWNS_FOLDER = config['output_settings']['unknowns_folder']
-
 except Exception as e:
-    # Use print here as logger is not yet initialized
     print(f"CRITICAL ERROR loading config.yaml: {e}")
     exit()
-
 
 # --- Helper Functions for this Runner Script ---
 
@@ -48,6 +39,9 @@ def init_logging(log_filepath):
 
 def log_run_summary(stats):
     """Formats and logs the final summary of the run."""
+
+    resize_line = f"- Resize Width        : {stats['resize_width']} px" if stats['resize_width'] != 'N/A' else "- Resize Width        : N/A (Internal to Model)"
+
     summary = f"""
     -------------------- RUN SUMMARY --------------------
     - Timestamp           : {stats['timestamp']}
@@ -55,7 +49,7 @@ def log_run_summary(stats):
     - Detector Model      : {stats['detector_model']}
     - Embedding Model     : {stats['embedding_model']}
     - DBSCAN eps          : {stats['eps_value']}
-    - Resize Width        : {stats['resize_width']} px
+    {resize_line} 
     - Images Processed    : {stats['images_processed']} (new)
     - Faces Detected      : {stats['faces_detected']} (new)
     - People Found        : {stats['people_found']} (total)
@@ -79,9 +73,9 @@ def main():
         "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
         "preset_name": active_model_name,
         "detector_model": preset_settings.get('detector') or preset_settings.get('model'),
-        "embedding_model": preset_settings.get('embedding_model', 'dlib'), # Default to 'dlib' if not specified
+        "embedding_model": preset_settings.get('embedding_model', 'dlib'),
         "eps_value": preset_settings['clustering']['eps'],
-        "resize_width": preset_settings['resize_width']
+        "resize_width": preset_settings.get('resize_width', 'N/A')
     }
 
     logging.info(f"-- Starting New Run --")
@@ -92,9 +86,19 @@ def main():
     processed_paths = {face['image_path'] for face in existing_faces}
 
     # 2. Process only new images
-    new_faces, img_count, face_count = core_engine.process_images(
-        SOURCE_DIR, preset_settings, existing_paths=processed_paths
-    )
+    # --- NEW: Call the correct function based on the library in the preset ---
+    # --- Call the correct function based on the library in the preset ---
+    if preset_settings['library'] == 'dlib':
+        new_faces, img_count, face_count = core_engine.process_images_dlib(
+            SOURCE_DIR, preset_settings, existing_paths=processed_paths
+        )
+    elif preset_settings['library'] == 'deepface':
+        new_faces, img_count, face_count = core_engine.process_images_deepface(
+            SOURCE_DIR, preset_settings, existing_paths=processed_paths
+        )
+    else:
+        new_faces, img_count, face_count = None, 0, 0
+        logging.error(f"Unknown library specified in preset: {preset_settings['library']}")
 
     # 3. Combine old and new data for a complete view
     all_face_data = existing_faces + (new_faces or [])

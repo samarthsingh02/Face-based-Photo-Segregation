@@ -1,12 +1,10 @@
 import os
 import yaml
 import logging
-import cv2
-from tqdm import tqdm
+import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
-import matplotlib.pyplot as plt
-import core_engine  # Import your engine
+import core_engine
 
 # --- Configure Logging ---
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -29,20 +27,30 @@ def find_optimal_eps():
     """
     logging.info(f"--- Finding optimal EPS for preset: '{active_model_name}' ---")
 
-    # Use the process_images function from the core engine to get all embeddings
-    # We pass an empty set for existing_paths to force it to process all images.
-    face_data, _, _ = core_engine.process_images(
-        SOURCE_DIR, preset_settings, existing_paths=set()
-    )
+    # --- CHANGE: Call the correct function based on the library in the preset ---
+    face_data = None
+    if preset_settings['library'] == 'dlib':
+        # Force re-processing of all images for this analysis
+        face_data, _, _ = core_engine.process_images_dlib(
+            SOURCE_DIR, preset_settings, existing_paths=set()
+        )
+    elif preset_settings['library'] == 'deepface':
+        # Force re-processing of all images for this analysis
+        face_data, _, _ = core_engine.process_images_deepface(
+            SOURCE_DIR, preset_settings, existing_paths=set()
+        )
+    else:
+        logging.error(f"Unknown library specified in preset: {preset_settings['library']}")
+        return
+    # --- END OF CHANGE ---
 
     if not face_data or len(face_data) < 2:
         logging.error("Not enough faces found to perform analysis. Need at least 2.")
         return
 
+    logging.info(f"\nFound {len(face_data)} total faces. Calculating nearest neighbor distances...")
     encodings = np.array([data['encoding'] for data in face_data])
-    logging.info(f"\nFound {len(encodings)} total faces. Calculating nearest neighbor distances...")
 
-    # ... (The rest of the script for calculating distances and plotting is the same) ...
     neighbors = NearestNeighbors(n_neighbors=2)
     nbrs = neighbors.fit(encodings)
     distances, indices = nbrs.kneighbors(encodings)
@@ -51,7 +59,7 @@ def find_optimal_eps():
     plt.figure(figsize=(10, 6))
     plt.plot(distances)
     plt.title(f'K-Distance Graph for Epsilon Tuning ({active_model_name})')
-    plt.xlabel('Faces (sorted by distance)')
+    plt.xlabel('Faces (sorted by distance to nearest neighbor)')
     plt.ylabel(f"Distance (eps) - Metric: {preset_settings['clustering']['metric']}")
     plt.grid(True)
 

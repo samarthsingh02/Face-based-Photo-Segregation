@@ -1,4 +1,4 @@
-active_model: dlib_hog
+active_model: deepface_facenet
 presets:
   dlib_hog:
     library: dlib
@@ -20,10 +20,21 @@ presets:
     library: deepface
     embedding_model: VGG-Face
     detector: retinaface
+    resize_width: N/A
     clustering:
       eps: 0.45
       min_samples: 2
       metric: cosine
+  deepface_facenet:
+    library: "deepface"
+    embedding_model: "Facenet"
+    detector: "retinaface"
+    resize_width: N/A
+    clustering:
+      eps: 0.8 # A good starting point for FaceNet
+      metric: "euclidean"
+      min_samples: 2
+
 directory_paths:
   source: source_images
   output: output_sorted

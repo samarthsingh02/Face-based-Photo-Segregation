@@ -1,46 +1,28 @@
 import os
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
 import shutil
 import logging
 import cv2
 from tqdm import tqdm
 from collections import Counter
-
-import face_recognition
-from deepface import DeepFace
 import numpy as np
 from sklearn.cluster import DBSCAN
 from sklearn.metrics.cluster import homogeneity_score, completeness_score, v_measure_score
+from sklearn.preprocessing import normalize
 
-# --- Embedding Helper Functions ---
 
-def _get_dlib_encodings(image, locations):
-    """Generates embeddings using the face_recognition (dlib) library."""
-    return face_recognition.face_encodings(image, locations)
 
-def _get_deepface_encodings(image_path, model_name, detector_backend):
+# NOTE: NO face_recognition or deepface imports here.
+
+def process_images_dlib(source_dir, preset_settings, existing_paths=set()):
     """
-    Generates embeddings using the DeepFace library, letting it handle detection.
+    Scans for new images and generates face embeddings using the dlib library.
     """
-    # Let DeepFace handle both detection and embedding generation for consistency
-    embedding_objs = DeepFace.represent(
-        img_path=image_path,
-        model_name=model_name,
-        detector_backend=detector_backend,
-        enforce_detection=True  # Ensure it finds at least one face
-    )
-    # Extract the embedding vector from the result dictionary
-    return [obj['embedding'] for obj in embedding_objs]
+    import face_recognition  # <-- Local import prevents conflicts
 
-# --- Main Engine Functions ---
-
-def process_images(source_dir, preset_settings, existing_paths=set()):
-    """
-    Scans for new images and generates face embeddings using the library
-    specified in the preset_settings.
-    """
-    logging.info(f"Discovering new images (skipping {len(existing_paths)} already processed)...")
-
-    # --- THIS BLOCK WAS MISSING ---
+    logging.info(f"Discovering new images for dlib (skipping {len(existing_paths)})...")
     new_image_paths = []
     for root, dirs, files in os.walk(source_dir):
         for file in files:
@@ -50,89 +32,86 @@ def process_images(source_dir, preset_settings, existing_paths=set()):
                     new_image_paths.append(full_path)
 
     if not new_image_paths:
-        logging.warning("No new images found to process.")
+        logging.warning("No new images to process with dlib.")
         return None, 0, 0
-    # --- END OF MISSING BLOCK ---
 
-    logging.info(f"Starting processing for {len(new_image_paths)} new images...")
+    logging.info(f"Starting dlib processing for {len(new_image_paths)} new images...")
     all_face_data = []
     total_faces_found = 0
-
     resize_width = preset_settings['resize_width']
 
-    for image_path in tqdm(new_image_paths, desc="Processing New Images"):
+    for image_path in tqdm(new_image_paths, desc="Processing (dlib)"):
         try:
-            encodings = []
-            if preset_settings['library'] == 'dlib':
-                # Dlib logic: resize, detect, then encode
-                image = cv2.imread(image_path)
-                if image is None:
-                    tqdm.write(f"Warning: Skipping corrupted image: {os.path.basename(image_path)}")
-                    continue
+            image = cv2.imread(image_path)
+            if image is None: continue
+            (h, w) = image.shape[:2]
+            if w > resize_width:
+                r = float(resize_width) / w
+                dim = (resize_width, int(h * r))
+                image = cv2.resize(image, dim, interpolation=cv2.INTER_AREA)
 
-                (h, w) = image.shape[:2]
-                if w > resize_width:
-                    r = float(resize_width) / w
-                    dim = (resize_width, int(h * r))
-                    image = cv2.resize(image, dim, interpolation=cv2.INTER_AREA)
-
-                rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-                locations = face_recognition.face_locations(rgb_image, model=preset_settings['model'])
-                total_faces_found += len(locations)
-                encodings = _get_dlib_encodings(rgb_image, locations)
-
-            elif preset_settings['library'] == 'deepface':
-                # DeepFace logic: Pass the original path and let it handle everything
-                encodings = _get_deepface_encodings(image_path, preset_settings['embedding_model'],
-                                                    preset_settings['detector'])
-                total_faces_found += len(encodings)
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            locations = face_recognition.face_locations(rgb_image, model=preset_settings['model'])
+            total_faces_found += len(locations)
+            encodings = face_recognition.face_encodings(rgb_image, locations)
 
             for encoding in encodings:
                 all_face_data.append({'image_path': image_path, 'encoding': encoding})
-
         except Exception as e:
-            tqdm.write(f"ERROR: Could not process {os.path.basename(image_path)}. Error: {e}")
+            tqdm.write(f"ERROR processing {os.path.basename(image_path)} with dlib: {e}")
 
-    logging.info(f"Completed processing. Found {total_faces_found} new faces in {len(new_image_paths)} images.")
+    logging.info(f"Completed dlib processing. Found {total_faces_found} new faces.")
     return all_face_data, len(new_image_paths), total_faces_found
 
-def cluster_faces(all_face_data, preset_settings):
+
+def process_images_deepface(source_dir, preset_settings, existing_paths=set()):
     """
-    Groups face encodings into clusters using settings from the preset.
+    Scans for new images and generates L2-NORMALIZED face embeddings
+    using the DeepFace library.
     """
-    if not all_face_data:
-        logging.warning("No faces were detected to cluster.")
+    from deepface import DeepFace
+
+    logging.info(f"Discovering new images for DeepFace (skipping {len(existing_paths)})...")
+    new_image_paths = []
+    for root, dirs, files in os.walk(source_dir):
+        for file in files:
+            if file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                full_path = os.path.join(root, file)
+                if full_path not in existing_paths:
+                    new_image_paths.append(full_path)
+
+    if not new_image_paths:
+        logging.warning("No new images to process with DeepFace.")
         return None, 0, 0
 
-    # Extract clustering parameters from the preset
-    cluster_settings = preset_settings['clustering']
-    eps = cluster_settings['eps']
-    min_samples = cluster_settings['min_samples']
-    metric = cluster_settings['metric']
+    logging.info(f"Starting DeepFace processing for {len(new_image_paths)} new images...")
+    all_face_data = []
+    total_faces_found = 0
+    model_name = preset_settings['embedding_model']
+    detector_backend = preset_settings['detector']
 
-    logging.info(f"Starting face clustering using '{metric}' metric...")
-    encodings = np.array([data['encoding'] for data in all_face_data])
+    # Pre-build model once for efficiency within this function call
+    DeepFace.build_model(model_name)
 
-    clt = DBSCAN(metric=metric, eps=eps, min_samples=min_samples)
-    clt.fit(encodings)
+    for image_path in tqdm(new_image_paths, desc="Processing (DeepFace)"):
+        try:
+            embedding_objs = DeepFace.represent(
+                img_path=image_path, model_name=model_name,
+                detector_backend=detector_backend, enforce_detection=True
+            )
 
+            # --- NEW STEP: NORMALIZE THE EMBEDDINGS ---
+            raw_encodings = [obj['embedding'] for obj in embedding_objs]
+            normalized_encodings = normalize(raw_encodings, norm='l2')
 
-    # 4. Calculate summary statistics from the clustering results.
-    # The algorithm returns a list of labels (clt.labels_).
-    # Each unique label (e.g., 0, 1, 2) represents a unique person.
-    # The special label '-1' is assigned by DBSCAN to noisy samples (outliers/unknowns).
-    unique_labels = set(clt.labels_)
-    num_people = len(unique_labels) - (1 if -1 in unique_labels else 0)
-    num_unknowns = list(clt.labels_).count(-1)
-    logging.info(f"Found {num_people} unique people (clusters) and {num_unknowns} unknown faces.")
+            total_faces_found += len(normalized_encodings)
+            for encoding in normalized_encodings:
+                all_face_data.append({'image_path': image_path, 'encoding': encoding})
+        except Exception as e:
+            tqdm.write(f"ERROR processing {os.path.basename(image_path)} with DeepFace: {e}")
 
-    # 5. Map Results: Add the assigned cluster ID back to each face's data dictionary.
-    # This links each individual face to the person-group it belongs to.
-    for i, label in enumerate(clt.labels_):
-        all_face_data[i]['cluster_id'] = int(label)
-
-    # 6. Return the enriched data and the calculated statistics.
-    return all_face_data, num_people, num_unknowns
+    logging.info(f"Completed DeepFace processing. Found {total_faces_found} new faces.")
+    return all_face_data, len(new_image_paths), total_faces_found
 
 
 def organize_files(all_face_data, output_dir, folder_prefix, unknowns_folder):
@@ -282,3 +261,34 @@ def calculate_clustering_metrics(all_face_data):
     report_lines.append("-----------------------------------------------------------------")
 
     return "\n".join(report_lines)
+
+
+def cluster_faces(all_face_data, preset_settings):
+    """
+    Groups face encodings into clusters using settings from the preset.
+    """
+    if not all_face_data:
+        logging.warning("No faces were detected to cluster.")
+        return None, 0, 0
+
+    # Extract clustering parameters from the preset
+    cluster_settings = preset_settings['clustering']
+    eps = cluster_settings['eps']
+    min_samples = cluster_settings['min_samples']
+    metric = cluster_settings['metric']
+
+    logging.info(f"Starting face clustering using '{metric}' metric...")
+    encodings = np.array([data['encoding'] for data in all_face_data])
+
+    clt = DBSCAN(metric=metric, eps=eps, min_samples=min_samples)
+    clt.fit(encodings)
+
+    unique_labels = set(clt.labels_)
+    num_people = len(unique_labels) - (1 if -1 in unique_labels else 0)
+    num_unknowns = list(clt.labels_).count(-1)
+    logging.info(f"Found {num_people} unique people (clusters) and {num_unknowns} unknown faces.")
+
+    for i, label in enumerate(clt.labels_):
+        all_face_data[i]['cluster_id'] = int(label)
+
+    return all_face_data, num_people, num_unknowns
