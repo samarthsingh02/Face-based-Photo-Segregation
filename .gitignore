@@ -23,10 +23,12 @@ Thumbs.db
 source_images/*
 output_sorted/*
 source_images_subset/*
+static/uploads/*
 
 # ...but DO NOT ignore the placeholder files inside them!
 !source_images/.gitkeep
 !output_sorted/.gitkeep
+!static/uploads/.gitkeep
 
 *.png
 

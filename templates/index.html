@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Face Sorter</title>
+    <link rel="stylesheet" href="https://cdn.simplecss.org/simple.min.css">
+</head>
+<body>
+    <header>
+        <h1>Face Sorter Project</h1>
+        <p>Upload your photos and let the AI organize them by person.</p>
+    </header>
+
+    <main>
+        <h3>1. Select Photos</h3>
+        <input type="file" id="photo-input" multiple accept="image/png, image/jpeg">
+
+        <h3>2. Upload and Process</h3>
+        <button id="upload-button">Start Processing</button>
+
+        <div id="status-area" style="margin-top: 20px;"></div>
+
+        <hr>
+
+        <h3>Results</h3>
+        <div id="results-area">
+            <p>Your sorted photos will appear here once processing is complete.</p>
+        </div>
+    </main>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
