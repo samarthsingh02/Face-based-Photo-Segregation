@@ -2,67 +2,130 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Face Sorter</title>
-    <link rel="stylesheet" href="https://cdn.simplecss.org/simple.min.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Sorter AI</title>
     <style>
+        :root {
+            --primary-color: #007bff;
+            --secondary-color: #6c757d;
+            --background-color: #f8f9fa;
+            --surface-color: #ffffff;
+            --border-color: #dee2e6;
+            --text-color: #212529;
+            --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+        body {
+            font-family: var(--font-family);
+            background-color: var(--background-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        header { text-align: center; margin-bottom: 3rem; }
+        h1 { color: var(--primary-color); }
+        main {
+            background: var(--surface-color);
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+        }
         #drop-zone {
-            border: 2px dashed #ccc;
+            border: 2px dashed var(--border-color);
             border-radius: 10px;
-            padding: 25px;
+            padding: 40px 25px;
             text-align: center;
             cursor: pointer;
+            transition: background-color 0.2s ease, border-color 0.2s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background-color: #fdfdff;
         }
-        #drop-zone.dragover {
-            background-color: #f0f8ff;
-            border-color: #007bff;
+        #drop-zone:hover, #drop-zone.dragover {
+            background-color: #eef7ff;
+            border-color: var(--primary-color);
         }
+        #drop-zone svg { width: 40px; height: 40px; margin-bottom: 10px; color: var(--primary-color); }
+        select, button {
+            font-size: 1rem;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+        }
+        button {
+            background-color: var(--primary-color);
+            color: white;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+        button:disabled { background-color: var(--secondary-color); cursor: not-allowed; }
+        button:hover:not(:disabled) { background-color: #0056b3; }
+        #preview-area {
+            display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px;
+            max-height: 230px; overflow-y: hidden;
+        }
+        #preview-area.show-all { max-height: 1000px; }
         #preview-area img {
-            width: 100px;
-            height: 100px;
-            object-fit: cover;
-            margin: 5px;
-            border-radius: 5px;
+            width: 100px; height: 100px; object-fit: cover;
+            border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
+        #toggle-previews-button { display: none; margin: 10px auto; }
+        #results-area .cluster { margin-top: 2rem; }
+        #results-area .image-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 10px;
+        }
+        #results-area img { width: 100%; height: 120px; object-fit: cover; border-radius: 5px; }
     </style>
 </head>
 <body>
-    <header>
-        <h1>Face Sorter Project</h1>
-        <p>Drag & drop your photos below or click to select them.</p>
-    </header>
+    <div class="container">
+        <header>
+            <h1>Face Sorter AI</h1>
+            <p>An intelligent tool to automatically organize your photos by person.</p>
+        </header>
 
-    <main>
-        <h3>1. Select Photos</h3>
-        <div id="drop-zone">
-            <p>Drag & Drop Photos Here</p>
-            <input type="file" id="photo-input" multiple accept="image/png, image/jpeg" hidden>
-        </div>
+        <main>
+            <h3>1. Select Model & Photos</h3>
+            <div>
+                <label for="preset-selector">Choose a Model:</label>
+                <select id="preset-selector">
+                    <option value="dlib_hog">Fast & Good (HOG)</option>
+                    <option value="dlib_cnn">Accurate & Slow (CNN)</option>
+                    <option value="deepface_facenet">Advanced (FaceNet)</option>
+                </select>
+            </div>
 
-        <div style="margin-top: 15px;">
-            <label for="preset-selector">Select Model:</label>
-            <select id="preset-selector">
-                <option value="dlib_hog">Fast & Good (HOG)</option>
-                <option value="dlib_cnn">Accurate & Slow (CNN)</option>
-                <option value="deepface_facenet">Advanced (FaceNet)</option>
-            </select>
-        </div>
-        <div id="preview-area" style="margin-top: 20px;"></div>
+            <div id="drop-zone" style="margin-top: 1rem;">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 16 16"><path d="M8 0a5.53 5.53 0 0 0-3.594 1.342c-.766.66-1.321 1.52-1.464 2.383C1.266 4.095 0 5.555 0 7.318 0 9.366 1.708 11 3.781 11H7.5V5.707L5.354 7.854a.5.5 0 1 1-.708-.708l3-3a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 5.707V11h4.188C14.502 11 16 9.57 16 7.773c0-1.636-1.242-2.969-2.834-3.194C12.923 1.99 10.69 0 8 0zm-.5 14.5V11h1v3.5a.5.5 0 0 1-1 0z"/></svg>
+                <p>Drag & Drop Photos Here, or Click to Select</p>
+                <input type="file" id="photo-input" multiple accept="image/png, image/jpeg" hidden>
+            </div>
 
+            <div id="preview-area"></div>
+            <button id="toggle-previews-button">Show All</button>
 
-        <button id="upload-button" style="margin-top: 10px;" disabled>Start Processing</button>
+            <h3 style="margin-top: 1.5rem;">2. Upload and Process</h3>
+            <button id="upload-button" disabled>Start Processing</button>
 
-        <div id="status-area" style="margin-top: 20px;">
-            <p id="status-text"></p>
-            <progress id="progress-bar" value="0" max="100" style="width: 100%; display: none;"></progress>
-        </div>
-        <hr>
+            <div id="status-area" style="margin-top: 1rem;">
+                <p id="status-text"></p>
+                <progress id="progress-bar" value="0" max="100" style="width: 100%; display: none;"></progress>
+            </div>
 
-        <h3>Results</h3>
-        <div id="results-area">
-            <p>Your sorted photos will appear here.</p>
-        </div>
-    </main>
-
+            <hr>
+            <h3>Results</h3>
+            <div id="results-area">
+                <p>Your sorted photos will appear here.</p>
+            </div>
+        </main>
+    </div>
     <script src="/static/script.js"></script>
 </body>
 </html>

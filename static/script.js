@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-    // --- Get all the HTML elements we need ---
+    // Get all the HTML elements we need
     const dropZone = document.getElementById('drop-zone');
     const photoInput = document.getElementById('photo-input');
     const uploadButton = document.getElementById('upload-button');
@@ -8,9 +8,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const previewArea = document.getElementById('preview-area');
     const resultsArea = document.getElementById('results-area');
     const presetSelector = document.getElementById('preset-selector');
+    const togglePreviewsButton = document.getElementById('toggle-previews-button');
 
-
-    let selectedFiles = []; // This will store the files to be uploaded
+    let selectedFiles = [];
 
     // --- Drag & Drop and File Selection Logic ---
     dropZone.addEventListener('click', () => photoInput.click());
@@ -29,18 +29,18 @@ document.addEventListener('DOMContentLoaded', () => {
     function handleFiles(files) {
         selectedFiles = [...files];
         previewArea.innerHTML = '';
-        resultsArea.innerHTML = '<p>Your sorted photos will appear here.</p>'; // Reset results on new selection
+        resultsArea.innerHTML = '<p>Your sorted photos will appear here.</p>';
 
         if (selectedFiles.length === 0) {
             uploadButton.disabled = true;
             statusText.innerText = '';
+            togglePreviewsButton.style.display = 'none';
             return;
         }
 
         uploadButton.disabled = false;
         statusText.innerText = `${selectedFiles.length} file(s) selected. Ready to process.`;
 
-        // Generate image previews
         for (const file of selectedFiles) {
             const reader = new FileReader();
             reader.onload = (e) => {
@@ -51,7 +51,22 @@ document.addEventListener('DOMContentLoaded', () => {
             };
             reader.readAsDataURL(file);
         }
+
+        if (selectedFiles.length > 20) { // Number of images before "Show All" appears
+            togglePreviewsButton.style.display = 'block';
+            togglePreviewsButton.innerText = `Show All (${selectedFiles.length} images)`;
+            previewArea.classList.remove('show-all');
+        } else {
+            togglePreviewsButton.style.display = 'none';
+        }
     }
+
+    togglePreviewsButton.addEventListener('click', () => {
+        previewArea.classList.toggle('show-all');
+        togglePreviewsButton.innerText = previewArea.classList.contains('show-all')
+            ? 'Show Less'
+            : `Show All (${selectedFiles.length} images)`;
+    });
 
     // --- Upload Logic ---
     uploadButton.addEventListener('click', async () => {
@@ -59,7 +74,6 @@ document.addEventListener('DOMContentLoaded', () => {
             statusText.innerText = 'Please select some photos first.';
             return;
         }
-
         statusText.innerText = 'Uploading photos...';
         uploadButton.disabled = true;
 
@@ -67,21 +81,13 @@ document.addEventListener('DOMContentLoaded', () => {
         for (const file of selectedFiles) {
             formData.append('photos', file);
         }
-
-        // --- NEW: Get the selected preset and add it to the form data ---
-        const selectedPreset = presetSelector.value;
-        formData.append('preset', selectedPreset);
-
+        formData.append('preset', presetSelector.value);
 
         try {
-            const response = await fetch('/api/process', {
-                method: 'POST',
-                body: formData,
-            });
+            const response = await fetch('/api/process', { method: 'POST', body: formData });
             const data = await response.json();
-
             if (response.ok) {
-                pollJobStatus(data.job_id); // Start checking the job status
+                pollJobStatus(data.job_id);
             } else {
                 statusText.innerText = `Error: ${data.error}`;
                 uploadButton.disabled = false;
