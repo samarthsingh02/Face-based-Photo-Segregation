@@ -270,10 +270,68 @@ document.addEventListener('DOMContentLoaded', () => {
             clusterData.images.forEach(imageUrl => {
                 const img = document.createElement('img');
                 img.src = imageUrl;
+                img.setAttribute('data-enlargeable', '');
                 imageContainer.appendChild(img);
             });
             clusterDiv.appendChild(imageContainer);
             resultsArea.appendChild(clusterDiv);
         }
     };
+});
+// --- Image Enlargement Modal Logic ---
+document.addEventListener('click', (e) => {
+    // Check if an enlargeable image inside the results area was clicked
+    if (e.target.matches('#results-area img[data-enlargeable]')) {
+        const src = e.target.src;
+
+        // Create modal elements
+        const overlay = document.createElement('div');
+        overlay.className = 'image-modal-overlay';
+
+        const modalImage = document.createElement('img');
+        modalImage.className = 'image-modal-content';
+        modalImage.src = src;
+
+        const closeBtn = document.createElement('span');
+        closeBtn.className = 'image-modal-close';
+        closeBtn.innerHTML = '&times;'; // The 'X' character
+
+        overlay.appendChild(modalImage);
+        overlay.appendChild(closeBtn);
+        document.body.appendChild(overlay);
+        document.body.classList.add('modal-open');
+
+        // A short timeout allows the browser to render the element before the transition starts
+        setTimeout(() => {
+            overlay.classList.add('visible');
+        }, 10);
+
+        // --- Function to close the modal ---
+        const closeModal = () => {
+            overlay.classList.remove('visible');
+            document.body.classList.remove('modal-open');
+            // Remove the element from the DOM after the fade-out transition ends
+            setTimeout(() => {
+                if (document.body.contains(overlay)) {
+                    document.body.removeChild(overlay);
+                }
+            }, 300); // Must match the CSS transition duration
+        };
+
+        // Close when the overlay or close button is clicked
+        overlay.addEventListener('click', (ev) => {
+            if (ev.target === overlay || ev.target === closeBtn) {
+                closeModal();
+            }
+        });
+
+        // Close with the 'Escape' key
+        const escapeHandler = (ev) => {
+            if (ev.key === 'Escape') {
+                closeModal();
+                document.removeEventListener('keydown', escapeHandler);
+            }
+        };
+        document.addEventListener('keydown', escapeHandler);
+    }
 });
