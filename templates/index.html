@@ -32,12 +32,22 @@
     </header>
 
     <main>
+        <h3>1. Select Photos</h3>
         <div id="drop-zone">
             <p>Drag & Drop Photos Here</p>
             <input type="file" id="photo-input" multiple accept="image/png, image/jpeg" hidden>
         </div>
 
+        <div style="margin-top: 15px;">
+            <label for="preset-selector">Select Model:</label>
+            <select id="preset-selector">
+                <option value="dlib_hog">Fast & Good (HOG)</option>
+                <option value="dlib_cnn">Accurate & Slow (CNN)</option>
+                <option value="deepface_facenet">Advanced (FaceNet)</option>
+            </select>
+        </div>
         <div id="preview-area" style="margin-top: 20px;"></div>
+
 
         <button id="upload-button" style="margin-top: 10px;" disabled>Start Processing</button>
 

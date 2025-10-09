@@ -7,6 +7,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const progressBar = document.getElementById('progress-bar');
     const previewArea = document.getElementById('preview-area');
     const resultsArea = document.getElementById('results-area');
+    const presetSelector = document.getElementById('preset-selector');
+
 
     let selectedFiles = []; // This will store the files to be uploaded
 
@@ -65,6 +67,11 @@ document.addEventListener('DOMContentLoaded', () => {
         for (const file of selectedFiles) {
             formData.append('photos', file);
         }
+
+        // --- NEW: Get the selected preset and add it to the form data ---
+        const selectedPreset = presetSelector.value;
+        formData.append('preset', selectedPreset);
+
 
         try {
             const response = await fetch('/api/process', {

@@ -89,6 +89,10 @@ def process_images_endpoint():
     if not uploaded_files:
         return jsonify({"error": "No photos provided"}), 400
 
+    # --- CHANGE: Get the preset name from the form data ---
+    # Default to 'dlib_hog' if for some reason it's not provided
+    preset_name = request.form.get('preset', 'dlib_hog')
+
     job_id = str(uuid.uuid4())
     job_folder = os.path.join(UPLOAD_FOLDER, job_id)
     os.makedirs(job_folder)
@@ -100,7 +104,8 @@ def process_images_endpoint():
     JOBS[job_id] = {'status': 'processing', 'progress': 0, 'result': None}
 
     # Start the background thread
-    thread = threading.Thread(target=run_face_processing_job, args=(job_id, job_folder, "dlib_hog"))
+    # --- CHANGE: Pass the selected preset_name to the background job ---
+    thread = threading.Thread(target=run_face_processing_job, args=(job_id, job_folder, preset_name))
     thread.start()
 
     return jsonify({"message": "Processing started.", "job_id": job_id})
