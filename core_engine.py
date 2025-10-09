@@ -300,3 +300,48 @@ def cluster_faces(all_face_data, preset_settings):
         all_face_data[i]['cluster_id'] = int(label)
 
     return all_face_data, num_people, num_unknowns
+
+def recognize_and_classify(new_faces, named_faces, threshold):
+    """
+    Compares new faces against a list of known, named faces.
+
+    Args:
+        new_faces (list): A list of face data from newly uploaded images.
+        named_faces (list): A list of face data for people already in the database.
+        threshold (float): The distance threshold for a match (e.g., DBSCAN 'eps').
+
+    Returns:
+        tuple: A tuple containing two lists: (identified_faces, unidentified_faces).
+    """
+    if not new_faces:
+        return [], []
+    if not named_faces:
+        # If there are no known people, all new faces are unidentified.
+        return [], new_faces
+
+    # Prepare known faces for efficient comparison
+    known_encodings = np.array([face['encoding'] for face in named_faces])
+    known_info = [{'name': face['person_name'], 'id': face['person_id']} for face in named_faces]
+
+    identified = []
+    unidentified = []
+
+    for face in new_faces:
+        new_encoding = face['encoding']
+        # Calculate Euclidean distances to all known faces
+        distances = np.linalg.norm(known_encodings - new_encoding, axis=1)
+
+        best_match_index = np.argmin(distances)
+        min_distance = distances[best_match_index]
+
+        if min_distance <= threshold:
+            # Match found! Assign the known person's name and ID.
+            face['person_name'] = known_info[best_match_index]['name']
+            face['person_id'] = known_info[best_match_index]['id']
+            identified.append(face)
+        else:
+            # No match found, this is an unidentified face.
+            unidentified.append(face)
+
+    logging.info(f"Recognition results: {len(identified)} identified, {len(unidentified)} unidentified.")
+    return identified, unidentified

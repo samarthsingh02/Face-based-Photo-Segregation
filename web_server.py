@@ -12,6 +12,8 @@ import yaml
 
 # --- Flask App Initialization ---
 app = Flask(__name__)
+database.init_db() # <--- AND ADD THIS LINE
+
 # CHANGE: The upload folder is now inside the 'static' directory
 UPLOAD_FOLDER = os.path.join("static", "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -26,54 +28,85 @@ def index():
 
 
 # --- UPDATED: Background Job Function ---
-# In web_server.py
 
 def run_face_processing_job(job_id, image_folder, preset_name):
     """
-    This function now saves a simplified, JSON-serializable result.
+    Handles the full background process:
+    1. Detects faces in new images.
+    2. Recognizes known people by comparing against the database.
+    3. Clusters any remaining, unidentified faces.
+    4. Saves all new faces to the database.
+    5. Formats the results for the frontend.
     """
     print(f"Job {job_id}: Starting background processing for preset '{preset_name}'...")
-
     try:
         with open('config.yaml', 'r') as f:
             config = yaml.safe_load(f)
         preset_settings = config['presets'][preset_name]
+        threshold = preset_settings['clustering']['eps']
 
-        def update_progress(current, total):
-            JOBS[job_id]['progress'] = int((current / total) * 100)
+        def update_progress(current, total, stage=""):
+            # Progress is now split into two stages: detection (80%) and clustering (20%)
+            base_progress = 80 if stage == "detection" else 100
+            stage_progress = int((current / total) * base_progress) if total > 0 else base_progress
+            JOBS[job_id]['progress'] = stage_progress
 
-
-        # Use the correct engine function based on the preset library
-        if preset_settings['library'] == 'dlib':
-            face_data, _, _ = core_engine.process_images_dlib(
-                image_folder, preset_settings, existing_paths=set(), progress_callback=update_progress
+        # --- STAGE 1: Detect all faces in the uploaded images ---
+        library = preset_settings['library']
+        if library == 'dlib':
+            newly_detected_faces, _, _ = core_engine.process_images_dlib(
+                image_folder, preset_settings, existing_paths=set(), progress_callback=lambda c, t: update_progress(c, t, "detection")
             )
-        elif preset_settings['library'] == 'deepface':
-            face_data, _, _ = core_engine.process_images_deepface(
-                image_folder, preset_settings, existing_paths=set(), progress_callback=update_progress
+        elif library == 'deepface':
+            newly_detected_faces, _, _ = core_engine.process_images_deepface(
+                image_folder, preset_settings, existing_paths=set(), progress_callback=lambda c, t: update_progress(c, t, "detection")
             )
         else:
-            raise ValueError(f"Unknown library in preset: {preset_settings['library']}")
+            raise ValueError(f"Unknown library in preset: {library}")
 
-        if face_data:
-            clustered_data, _, _ = core_engine.cluster_faces(face_data, preset_settings)
+        if not newly_detected_faces:
+            JOBS[job_id].update({'status': 'complete', 'result': "No new faces found."})
+            print(f"Job {job_id}: No faces found.")
+            return
 
-            # --- START OF FIX ---
-            # Create a simplified result that is JSON-safe
-            # CHANGE: Create a result with public URLs for the images
-            simplified_results = []
-            for face in clustered_data:
-                # Construct the public URL path for the image
-                public_path = os.path.join(UPLOAD_FOLDER, job_id, os.path.basename(face["image_path"])).replace("\\",
-                                                                                                                "/")
-                simplified_results.append({
-                    "image_url": public_path,
-                    "cluster_id": face["cluster_id"]
-                })
-            JOBS[job_id]['result'] = simplified_results
-        else:
-            JOBS[job_id]['result'] = "No faces found."
+        # --- STAGE 2: Recognize, Cluster, and Save ---
+        JOBS[job_id]['progress'] = 85 # Update progress bar for next stage
 
+        # 2a. Get known faces from the database to compare against
+        named_faces_from_db = database.get_named_faces_by_model(preset_name)
+
+        # 2b. Separate new faces into recognized and unrecognized groups
+        identified_faces, unidentified_faces = core_engine.recognize_and_classify(
+            newly_detected_faces, named_faces_from_db, threshold
+        )
+
+        # 2c. Cluster only the unidentified faces
+        clustered_unidentified = []
+        if unidentified_faces:
+            clustered_unidentified, _, _ = core_engine.cluster_faces(unidentified_faces, preset_settings)
+
+        JOBS[job_id]['progress'] = 95 # Update progress before saving
+
+        # 2d. Save ALL new faces to the database and get their new IDs
+        all_new_faces = identified_faces + clustered_unidentified
+        inserted_ids = database.add_faces_and_get_ids(all_new_faces, preset_name)
+        for i, face in enumerate(all_new_faces):
+            face['id'] = inserted_ids[i] # Assign the new database ID
+
+        # --- STAGE 3: Prepare results for the frontend ---
+        simplified_results = []
+        for face in all_new_faces:
+            public_path = os.path.join("static", "uploads", job_id, os.path.basename(face["image_path"])).replace("\\",                                                                                               "/")
+            result_obj = {
+                "face_id": face.get("id"),
+                "image_url": public_path,
+                # Use the person's name for recognized faces, or the cluster_id for new ones
+                "cluster_id": face.get("person_name") or face.get("cluster_id"),
+                "is_named": "person_name" in face # Flag for the frontend
+            }
+            simplified_results.append(result_obj)
+
+        JOBS[job_id]['result'] = simplified_results
         JOBS[job_id]['status'] = 'complete'
         print(f"Job {job_id}: Processing complete.")
 
@@ -81,6 +114,24 @@ def run_face_processing_job(job_id, image_folder, preset_name):
         JOBS[job_id]['status'] = 'failed'
         JOBS[job_id]['error'] = str(e)
         print(f"Job {job_id}: Processing failed. Error: {e}")
+
+@app.route('/api/name_cluster', methods=['POST'])
+def name_cluster():
+    data = request.get_json()
+    face_ids = data.get('face_ids')
+    name = data.get('name')
+
+    if not face_ids or not name:
+        return jsonify({"error": "Missing face_ids or name"}), 400
+
+    # 1. Find or create the person in the database
+    person_id = database.get_or_create_person(name)
+
+    # 2. Link faces directly
+    database.link_faces_to_person(face_ids, person_id)
+
+    return jsonify({"success": True, "message": f"Linked {len(face_ids)} faces to '{name}'."})
+
 
 # --- UPDATED: Main /api/process Endpoint ---
 @app.route('/api/process', methods=['POST'])
