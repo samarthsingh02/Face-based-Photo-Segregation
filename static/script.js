@@ -44,16 +44,53 @@ document.addEventListener('DOMContentLoaded', () => {
         uploadButton.disabled = false;
         statusText.innerText = `${selectedFiles.length} file(s) selected. Ready to process.`;
 
+        // This loop now handles images and zips ---
         for (const file of selectedFiles) {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                const img = document.createElement('img');
-                img.src = e.target.result;
-                img.title = file.name;
-                previewArea.appendChild(img);
-            };
-            reader.readAsDataURL(file);
+            // A. If it's an image
+            if (file.type.startsWith('image/')) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = document.createElement('img');
+                    img.src = e.target.result;
+                    img.title = file.name;
+                    previewArea.appendChild(img);
+                };
+                reader.readAsDataURL(file);
+            }
+            // B. If it's a zip file
+            else if (file.type === 'application/zip' || file.type === 'application/x-zip-compressed' || file.name.toLowerCase().endsWith('.zip')) {
+                const zipPlaceholder = document.createElement('div');
+                zipPlaceholder.className = 'zip-placeholder';
+                zipPlaceholder.title = file.name;
+                // Basic styling for the placeholder
+                zipPlaceholder.style = `
+                    width: 100px; 
+                    height: 100px; 
+                    background: #f0f0f0; 
+                    border: 1px solid #ccc; 
+                    border-radius: 5px; 
+                    display: flex; 
+                    flex-direction: column; 
+                    align-items: center; 
+                    justify-content: center; 
+                    padding: 5px; 
+                    box-sizing: border-box; 
+                    text-align: center;
+                `;
+                // Simple ZIP icon SVG
+                zipPlaceholder.innerHTML = `
+                    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" fill="currentColor" viewBox="0 0 16 16">
+                        <path d="M.5 1a.5.5 0 0 0 0 1h1.114l.401 1.604A.5.5 0 0 0 2.5 4h11a.5.5 0 0 0 0-1h-11l-.401-1.604A.5.5 0 0 0 1.614 1H.5z"/>
+                        <path d="M6 14.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zM11.5 16a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM2 6h1v1H2V6zm1 1h1v1H3V7zm1 1h1v1H4V8zm1 1h1v1H5V9zm1 1h1v1H6v-1z"/>
+                        <path fill-rule="evenodd" d="M.5 1a.5.5 0 0 0-.5.5v13a.5.5 0 0 0 .5.5h15a.5.5 0 0 0 .5-.5v-13a.5.5 0 0 0-.5-.5H.5zM1 2h14v12H1V2z"/>
+                    </svg>
+                    <span style="font-size: 11px; word-break: break-all; margin-top: 5px; max-height: 40px; overflow: hidden;"></span>
+                `;
+                zipPlaceholder.querySelector('span').innerText = file.name;
+                previewArea.appendChild(zipPlaceholder);
+            }
         }
+
 
         if (selectedFiles.length > 20) { // Number of images before "Show All" appears
             togglePreviewsButton.style.display = 'block';

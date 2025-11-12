@@ -7,6 +7,7 @@ import threading
 import shutil
 import io
 import zipfile
+from werkzeug.utils import secure_filename
 
 import core_engine
 import database
@@ -172,19 +173,67 @@ def process_images_endpoint():
     job_folder = os.path.join(UPLOAD_FOLDER, job_id)
     os.makedirs(job_folder)
 
+    # LOGIC TO HANDLE ZIPS AND IMAGES ---
+    processed_files = False
     for file in uploaded_files:
-        file.save(os.path.join(job_folder, file.filename))
+        if not file or not file.filename:
+            continue
+
+        filename = secure_filename(file.filename)
+
+        try:
+            # --- A. If it's a ZIP file ---
+            if filename.lower().endswith('.zip'):
+                print(f"Job {job_id}: Extracting images from {filename}...")
+                # Read the file stream into memory
+                file_stream = io.BytesIO(file.read())
+                with zipfile.ZipFile(file_stream, 'r') as zf:
+                    for member in zf.infolist():
+                        # Skip directories and non-image files
+                        if member.is_dir():
+                            continue
+
+                        # Use os.path.basename to prevent path traversal (e.g., ../../)
+                        member_name = os.path.basename(member.filename)
+                        if not member_name:
+                            continue  # Skip empty filenames (like folder entries)
+
+                        if member_name.lower().endswith(('.png', '.jpg', '.jpeg')):
+                            # Define the full, safe extraction path
+                            extract_path = os.path.join(job_folder, member_name)
+
+                            # Extract the file data and write it
+                            with zf.open(member) as source_file:
+                                with open(extract_path, 'wb') as target_file:
+                                    shutil.copyfileobj(source_file, target_file)
+                            processed_files = True
+
+            # --- B. If it's a regular IMAGE file ---
+            elif filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                file.save(os.path.join(job_folder, filename))
+                processed_files = True
+
+            # --- C. Other files are ignored ---
+
+        except zipfile.BadZipFile:
+            print(f"Job {job_id}: Ignoring corrupt zip file: {filename}")
+        except Exception as e:
+            print(f"Job {job_id}: Error processing file {filename}: {e}")
+
+    # --- 3. CHECK IF ANY FILES WERE ACTUALLY PROCESSED ---
+    if not processed_files:
+        # Clean up the empty job folder
+        shutil.rmtree(job_folder)
+        return jsonify({"error": "No valid image files (png, jpg, jpeg) or .zip files were provided."}), 400
 
     # Initialize the job status in the JOBS dictionary
     JOBS[job_id] = {'status': 'processing', 'progress': 0, 'result': None}
 
     # Start the background thread
-    # Pass the selected preset_name to the background job ---
     thread = threading.Thread(target=run_face_processing_job, args=(job_id, job_folder, preset_name))
     thread.start()
 
     return jsonify({"message": "Processing started.", "job_id": job_id})
-
 
 # --- Status Endpoint ---
 @app.route('/api/status/<job_id>')
