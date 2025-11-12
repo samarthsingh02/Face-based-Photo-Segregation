@@ -9,12 +9,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const resultsArea = document.getElementById('results-area');
     const presetSelector = document.getElementById('preset-selector');
     const togglePreviewsButton = document.getElementById('toggle-previews-button');
-
-    // --- ADD THIS LINE ---
     const cancelButton = document.getElementById('cancel-button');
+    const downloadButton = document.getElementById('download-button');
 
     let selectedFiles = [];
-    // --- ADD THIS LINE ---
     let currentJobId = null;
 
     // --- Drag & Drop and File Selection Logic ---
@@ -81,8 +79,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         statusText.innerText = 'Uploading photos...';
         uploadButton.disabled = true;
-        // --- NEW: Show cancel button ---
         cancelButton.style.display = 'inline-block';
+        downloadButton.style.display = 'none';
 
         const formData = new FormData();
         for (const file of selectedFiles) {
@@ -157,10 +155,14 @@ document.addEventListener('DOMContentLoaded', () => {
                         progressBar.value = 100;
                         statusText.innerText = 'Processing complete! Displaying results.';
                         displayResults(data.result, jobId);
+                        downloadButton.href = `/api/download/${jobId}`;
+                        downloadButton.style.display = 'inline-block';
                     } else if (data.status === 'failed') {
                         statusText.innerText = `Job failed: ${data.error}`;
+                        downloadButton.style.display = 'none';
                     } else if (data.status === 'cancelled') {
                         statusText.innerText = 'Job cancelled.';
+                        downloadButton.style.display = 'none';
                     }
                 }
             } catch (error) {
@@ -174,6 +176,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 currentJobId = null;
                 cancelButton.style.display = 'none';
                 cancelButton.disabled = false;
+                downloadButton.style.display = 'none';
             }
         }, 2000);
     };

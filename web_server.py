@@ -1,10 +1,12 @@
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, send_file
 import uuid
 import threading
 import shutil
+import io
+import zipfile
 
 import core_engine
 import database
@@ -207,6 +209,64 @@ def cancel_job(job_id):
         return jsonify({"success": True, "message": "Cancellation requested."})
     return jsonify({"error": "Job not found or already completed."}), 404
 
+# --- NEW: Download Zip Endpoint ---
+@app.route('/api/download/<job_id>')
+def download_zip(job_id):
+    """Generates and sends a zip file of the sorted results."""
+    job = JOBS.get(job_id)
+    if not job or job['status'] != 'complete':
+        return jsonify({"error": "Job not found or not complete"}), 404
+
+    results = job.get('result', [])
+    if not results:
+        return jsonify({"error": "No results to download"}), 404
+
+    # Create an in-memory zip file
+    memory_file = io.BytesIO()
+    with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+        # Keep track of files added to avoid duplicates from multiple faces in one image
+        added_files_in_zip = set()
+
+        for face in results:
+            try:
+                # Replicate frontend logic for folder names
+                cluster_id = face.get("cluster_id")
+                is_named = face.get("is_named")
+
+                if is_named:
+                    folder_name = str(cluster_id)
+                elif str(cluster_id) == '-1':
+                    folder_name = 'Unknowns'
+                else:
+                    folder_name = f"Person {int(cluster_id) + 1}"
+
+                # The image_url is the path from the app's root (e.g., "static/uploads/...")
+                source_file_path = face.get("image_url")
+
+                # Get just the filename (e.g., "samarth_1.jpg")
+                file_name = os.path.basename(source_file_path)
+
+                # This is the full path *inside* the zip file (e.g., "Samarth/samarth_1.jpg")
+                arcname = os.path.join(folder_name, file_name)
+
+                # Add the file to the zip if it hasn't been added already
+                if arcname not in added_files_in_zip:
+                    zf.write(source_file_path, arcname=arcname)
+                    added_files_in_zip.add(arcname)
+
+            except Exception as e:
+                print(f"Error adding {face.get('image_url')} to zip: {e}")
+                # Continue trying to add other files
+
+    # Rewind the file to the beginning
+    memory_file.seek(0)
+
+    return send_file(
+        memory_file,
+        download_name=f'sorted_photos_{job_id}.zip',
+        as_attachment=True,
+        mimetype='application/zip'
+    )
 
 # --- Main Execution ---
 if __name__ == '__main__':
