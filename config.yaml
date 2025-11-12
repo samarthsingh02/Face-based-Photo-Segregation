@@ -35,11 +35,21 @@ presets:
       metric: "euclidean"
       min_samples: 2
 
+# ADD THIS NEW SECTION
+postgresql:
+  host: "localhost"
+  port: 5432
+  user: "postgres"
+  password: "Samarth02@postgres"
+  dbname: "face_gallery"
+
 directory_paths:
   source: source_images
   output: output_sorted
   log_file: run_log.txt
   ground_truth: ground_truth.json
+  gallery_storage: gallery_storage
+
 output_settings:
   folder_prefix: Person_
   unknowns_folder: Unknowns

@@ -2,18 +2,139 @@ import os
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-import shutil
 import logging
 import cv2
-from tqdm import tqdm
-from collections import Counter
 import numpy as np
-from sklearn.cluster import DBSCAN
-from sklearn.metrics.cluster import homogeneity_score, completeness_score, v_measure_score
 from sklearn.preprocessing import normalize
-import sys
+import database  # <-- NEW: We now talk to the database
 
 
+# --- NEW: Main processing function called by web_server ---
+
+def process_single_image(permanent_path, photo_id, preset_name, preset_settings):
+    """
+    Processes a single image:
+    1. Finds all faces in the image.
+    2. Gets their encodings.
+    3. Tries to recognize each face against the database.
+    4. Saves all found faces (both recognized and new) to the database.
+    """
+    try:
+        # 1. Get all encodings from the single image
+        new_encodings = _get_encodings_for_image(permanent_path, preset_settings)
+        if not new_encodings:
+            logging.info(f"No faces found in photo_id {photo_id} ({permanent_path})")
+            return
+
+        logging.info(f"Found {len(new_encodings)} faces in photo_id {photo_id}.")
+
+        # 2. Get all *known* faces from the DB to compare against
+        threshold = preset_settings['clustering']['eps']
+        named_faces_from_db = database.get_named_faces_by_model(preset_name)
+
+        # 3. Try to recognize each new face
+        for encoding in new_encodings:
+            person_id = None  # Default to 'Unknown'
+
+            if named_faces_from_db:
+                # This is the same logic as your old `recognize_and_classify`
+                known_encodings = np.array([face['encoding'] for face in named_faces_from_db])
+                distances = np.linalg.norm(known_encodings - encoding, axis=1)
+
+                best_match_index = np.argmin(distances)
+                min_distance = distances[best_match_index]
+
+                if min_distance <= threshold:
+                    # Match found! Get the person_id
+                    person_id = named_faces_from_db[best_match_index]['person_id']
+                    person_name = named_faces_from_db[best_match_index]['person_name']
+                    logging.info(f"  -> Recognized face as '{person_name}' (ID: {person_id}).")
+
+            # 4. Save the face to the database
+            database.add_face(
+                photo_id=photo_id,
+                model_preset=preset_name,
+                encoding=encoding,
+                person_id=person_id  # This will be None if no match was found
+            )
+
+    except Exception as e:
+        logging.error(f"CRITICAL error processing photo_id {photo_id} ({permanent_path}): {e}")
+        # Log the error but don't crash the whole job
+
+
+# --- NEW: Helper function to get encodings ---
+
+def _get_encodings_for_image(image_path, preset_settings):
+    """
+    Private helper. Extracts face encodings from a single image file
+    based on the preset's library (dlib or deepface).
+    """
+    library = preset_settings.get('library', 'dlib')
+
+    if library == 'dlib':
+        import face_recognition  # Local import
+        try:
+            image = cv2.imread(image_path)
+            if image is None:
+                logging.warning(f"Could not read image (dlib): {image_path}")
+                return []
+
+            (h, w) = image.shape[:2]
+            resize_width = preset_settings['resize_width']
+            if w > resize_width:
+                r = float(resize_width) / w
+                dim = (resize_width, int(h * r))
+                image = cv2.resize(image, dim, interpolation=cv2.INTER_AREA)
+
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            locations = face_recognition.face_locations(rgb_image, model=preset_settings['model'])
+            encodings = face_recognition.face_encodings(rgb_image, locations)
+            return encodings
+
+        except Exception as e:
+            logging.error(f"Error processing {os.path.basename(image_path)} with dlib: {e}")
+            return []
+
+    elif library == 'deepface':
+        from deepface import DeepFace  # Local import
+        try:
+            embedding_objs = DeepFace.represent(
+                img_path=image_path,
+                model_name=preset_settings['embedding_model'],
+                detector_backend=preset_settings['detector'],
+                enforce_detection=True
+            )
+
+            raw_encodings = [obj['embedding'] for obj in embedding_objs]
+            # L2 normalize encodings for consistent distance comparison
+            normalized_encodings = normalize(raw_encodings, norm='l2')
+            return normalized_encodings
+
+        except Exception as e:
+            # DeepFace throws a generic 'Exception' if no face is found
+            if "Face could not be detected" in str(e):
+                logging.info(f"No face detected in {os.path.basename(image_path)} by DeepFace.")
+            else:
+                logging.error(f"Error processing {os.path.basename(image_path)} with DeepFace: {e}")
+            return []
+
+    else:
+        raise ValueError(f"Unknown library in preset: {library}")
+
+
+# --- All functions below this point are now OBSOLETE ---
+# We leave them here, commented out, for reference,
+# but they are no longer used by the new web_server.
+
+# def process_images_dlib(...)
+# def process_images_deepface(...)
+# def organize_files(...)
+# def calculate_clustering_metrics(...)
+# def cluster_faces(...)
+# def recognize_and_classify(...)
+
+'''
 
 # NOTE: NO face_recognition or deepface imports here.
 
@@ -346,3 +467,5 @@ def recognize_and_classify(new_faces, named_faces, threshold):
 
     logging.info(f"Recognition results: {len(identified)} identified, {len(unidentified)} unidentified.")
     return identified, unidentified
+
+'''

@@ -1,4 +1,5 @@
 import os
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 from flask import Flask, request, jsonify, render_template, send_file
@@ -7,26 +8,47 @@ import threading
 import shutil
 import io
 import zipfile
-from werkzeug.utils import secure_filename
-
 import core_engine
 import database
 import yaml
+from werkzeug.utils import secure_filename
+import hashlib  # <-- NEW: For creating unique filenames
+import pathlib  # <-- NEW: For easier path/extension handling
 
 # --- Flask App Initialization ---
 app = Flask(__name__)
-database.init_db()
 
-# The upload folder is now inside the 'static' directory
-UPLOAD_FOLDER = os.path.join("static", "uploads")
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+# --- NEW: Load Config and Set Up Permanent Storage ---
+try:
+    with open('config.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+    GALLERY_STORAGE_PATH = config['directory_paths']['gallery_storage']
+    # Ensure the gallery_storage directory exists
+    os.makedirs(GALLERY_STORAGE_PATH, exist_ok=True)
+    # Also ensure the temporary upload folder exists
+    UPLOAD_FOLDER = os.path.join("static", "uploads")
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+except Exception as e:
+    print(f"CRITICAL ERROR: Could not load 'gallery_storage' path from config.yaml. Please check your config. {e}")
+    exit()
 
-# Shared dictionary to track job status ---
+# --- NEW: Initialize Database on startup ---
+try:
+    print("Initializing database...")
+    database.init_db()
+    print("Database initialization complete.")
+except Exception as e:
+    print(f"CRITICAL ERROR: Could not initialize database. Is PostgreSQL running? {e}")
+    exit()
+
+# Shared dictionary to track job status
 JOBS = {}
 
-# Custom exception for cancellation ---
+
+# Custom exception for cancellation
 class JobCancelledException(Exception):
     pass
+
 
 @app.route('/')
 def index():
@@ -34,111 +56,112 @@ def index():
     return render_template('index.html')
 
 
-# --- UPDATED: Background Job Function ---
+# --- UPDATED: Background Job Function (Major Rewrite) ---
 
-def run_face_processing_job(job_id, image_folder, preset_name):
+def run_face_processing_job(job_id, temp_job_folder, preset_name):
     """
-    Handles the full background process:
-    1. Detects faces in new images.
-    2. Recognizes known people by comparing against the database.
-    3. Clusters any remaining, unidentified faces.
-    4. Saves all new faces to the database.
-    5. Formats the results for the frontend.
+    Handles the new "persistent gallery" background process:
+    1. Iterates through all files in the temporary job folder.
+    2. Hashes each file to create a unique, permanent path.
+    3. Copies the file to the permanent 'gallery_storage'.
+    4. Adds the photo to the 'photos' table in the database.
+    5. Calls core_engine to find/save faces for that *new* photo_id.
+    6. Deletes the temporary job folder.
     """
     print(f"Job {job_id}: Starting background processing for preset '{preset_name}'...")
     try:
-        # Check for immediate cancellation ---
         if JOBS[job_id].get('status') == 'cancelling':
-            JOBS[job_id]['status'] = 'cancelled'
-            print(f"Job {job_id}: Cancelled before starting.")
-            return
+            raise JobCancelledException("Job cancelled before start.")
 
         with open('config.yaml', 'r') as f:
             config = yaml.safe_load(f)
         preset_settings = config['presets'][preset_name]
-        threshold = preset_settings['clustering']['eps']
 
-        def update_progress(current, total, stage=""):
-            # Check for cancellation signal
-            if JOBS[job_id].get('status') == 'cancelling':
-                raise JobCancelledException(f"Job {job_id} cancelled during {stage}.")
+        # --- 1. Get a list of all files to process ---
+        files_to_process = []
+        for root, dirs, files in os.walk(temp_job_folder):
+            for file in files:
+                files_to_process.append(os.path.join(root, file))
 
-            # Progress is now split into two stages: detection (80%) and clustering (20%)
-            base_progress = 80 if stage == "detection" else 100
-            stage_progress = int((current / total) * base_progress) if total > 0 else base_progress
-            JOBS[job_id]['progress'] = stage_progress
-
-        # --- STAGE 1: Detect all faces in the uploaded images ---
-        library = preset_settings['library']
-        if library == 'dlib':
-            newly_detected_faces, _, _ = core_engine.process_images_dlib(
-                image_folder, preset_settings, existing_paths=set(), progress_callback=lambda c, t: update_progress(c, t, "detection")
-            )
-        elif library == 'deepface':
-            newly_detected_faces, _, _ = core_engine.process_images_deepface(
-                image_folder, preset_settings, existing_paths=set(), progress_callback=lambda c, t: update_progress(c, t, "detection")
-            )
-        else:
-            raise ValueError(f"Unknown library in preset: {library}")
-
-        if not newly_detected_faces:
-            JOBS[job_id].update({'status': 'complete', 'result': "No new faces found."})
-            print(f"Job {job_id}: No faces found.")
+        if not files_to_process:
+            JOBS[job_id].update({'status': 'complete', 'result': "No valid files found."})
+            print(f"Job {job_id}: No files found to process.")
             return
 
-        # --- STAGE 2: Recognize, Cluster, and Save ---
-        JOBS[job_id]['progress'] = 85 # Update progress bar for next stage
+        total_files = len(files_to_process)
 
-        # 2a. Get known faces from the database to compare against
-        named_faces_from_db = database.get_named_faces_by_model(preset_name)
-
-        # 2b. Separate new faces into recognized and unrecognized groups
-        identified_faces, unidentified_faces = core_engine.recognize_and_classify(
-            newly_detected_faces, named_faces_from_db, threshold
-        )
-
-        # 2c. Cluster only the unidentified faces
-        clustered_unidentified = []
-        if unidentified_faces:
-            # Check for cancellation before clustering ---
+        # --- 2. Process files one by one ---
+        for i, file_path in enumerate(files_to_process):
             if JOBS[job_id].get('status') == 'cancelling':
-                raise JobCancelledException(f"Job {job_id} cancelled before clustering.")
-            clustered_unidentified, _, _ = core_engine.cluster_faces(unidentified_faces, preset_settings)
-        JOBS[job_id]['progress'] = 95 # Update progress before saving
+                raise JobCancelledException(f"Job {job_id} cancelled during processing.")
 
-        # 2d. Save ALL new faces to the database and get their new IDs
-        all_new_faces = identified_faces + clustered_unidentified
-        inserted_ids = database.add_faces_and_get_ids(all_new_faces, preset_name)
-        for i, face in enumerate(all_new_faces):
-            face['id'] = inserted_ids[i] # Assign the new database ID
+            # Update progress
+            progress = int(((i + 1) / total_files) * 100)
+            JOBS[job_id]['progress'] = progress
 
-        # --- STAGE 3: Prepare results for the frontend ---
-        simplified_results = []
-        for face in all_new_faces:
-            public_path = os.path.join("static", "uploads", job_id, os.path.basename(face["image_path"])).replace("\\",                                                                                               "/")
-            result_obj = {
-                "face_id": face.get("id"),
-                "image_url": public_path,
-                # Use the person's name for recognized faces, or the cluster_id for new ones
-                "cluster_id": face.get("person_name") or face.get("cluster_id"),
-                "is_named": "person_name" in face # Flag for the frontend
-            }
-            simplified_results.append(result_obj)
+            original_filename = os.path.basename(file_path)
 
-        JOBS[job_id]['result'] = simplified_results
+            try:
+                # --- 3. Create unique path and save to permanent gallery ---
+                file_hash = hashlib.sha256(open(file_path, 'rb').read()).hexdigest()
+                file_ext = pathlib.Path(file_path).suffix.lower()
+
+                # Use first 2 chars of hash for a subfolder (e.g., gallery_storage/f1/f1d2...)
+                # This prevents having 1,000,000 files in a single folder.
+                hash_folder = os.path.join(GALLERY_STORAGE_PATH, file_hash[:2])
+                os.makedirs(hash_folder, exist_ok=True)
+
+                permanent_path = os.path.join(hash_folder, f"{file_hash}{file_ext}")
+
+                # If file already exists, don't copy it again.
+                if not os.path.exists(permanent_path):
+                    shutil.copy(file_path, permanent_path)
+
+                # --- 4. Add photo to database ---
+                photo_id = database.add_photo(permanent_path, original_filename)
+
+                if photo_id is None:
+                    # This happens if the photo was already in the DB (UNIQUE constraint)
+                    # We can just skip processing it.
+                    print(f"Job {job_id}: Skipping already processed photo: {original_filename}")
+                    continue
+
+                # --- 5. Call Core Engine to process this *single* photo ---
+                # We will write this function in the next step!
+                core_engine.process_single_image(
+                    permanent_path,
+                    photo_id,
+                    preset_name,
+                    preset_settings
+                )
+
+            except Exception as e:
+                print(f"Job {job_id}: FAILED to process file {original_filename}: {e}")
+                # Don't stop the whole batch, just skip this file.
+
+        # --- 6. Job Complete ---
         JOBS[job_id]['status'] = 'complete'
+        # NEW: Results are no longer stored in memory, they are in the database.
+        # We just tell the frontend the job is done.
+        JOBS[job_id]['result'] = "Processing complete. Your gallery is updated."
         print(f"Job {job_id}: Processing complete.")
 
-
-    # --- NEW: Catch the cancellation exception ---
     except JobCancelledException as e:
         JOBS[job_id]['status'] = 'cancelled'
         print(str(e))
-
     except Exception as e:
         JOBS[job_id]['status'] = 'failed'
         JOBS[job_id]['error'] = str(e)
-        print(f"Job {job_id}: Processing failed. Error: {e}")
+        print(f"Job {job_id}: Processing FAILED. Error: {e}")
+    finally:
+        # --- 7. CRITICAL: Clean up the temporary job folder ---
+        try:
+            if os.path.exists(temp_job_folder):
+                shutil.rmtree(temp_job_folder)
+                print(f"Job {job_id}: Temporary folder {temp_job_folder} cleaned up.")
+        except Exception as e:
+            print(f"Job {job_id}: ERROR cleaning up temp folder {temp_job_folder}: {e}")
+
 
 @app.route('/api/name_cluster', methods=['POST'])
 def name_cluster():
@@ -151,6 +174,8 @@ def name_cluster():
 
     # 1. Find or create the person in the database
     person_id = database.get_or_create_person(name)
+    if person_id is None:
+        return jsonify({"error": "Failed to get or create person entry."}), 500
 
     # 2. Link faces directly
     database.link_faces_to_person(face_ids, person_id)
@@ -158,23 +183,21 @@ def name_cluster():
     return jsonify({"success": True, "message": f"Linked {len(face_ids)} faces to '{name}'."})
 
 
-# --- Main /api/process Endpoint ---
+# --- UPDATED: Main /api/process Endpoint ---
 @app.route('/api/process', methods=['POST'])
 def process_images_endpoint():
     uploaded_files = request.files.getlist('photos')
     if not uploaded_files:
         return jsonify({"error": "No photos provided"}), 400
 
-    # ---Get the preset name from the form data ---
-    # Default to 'dlib_hog' if for some reason it's not provided
     preset_name = request.form.get('preset', 'dlib_hog')
 
     job_id = str(uuid.uuid4())
-    job_folder = os.path.join(UPLOAD_FOLDER, job_id)
-    os.makedirs(job_folder)
+    temp_job_folder = os.path.join(UPLOAD_FOLDER, job_id)
+    os.makedirs(temp_job_folder)
 
-    # LOGIC TO HANDLE ZIPS AND IMAGES ---
-    processed_files = False
+    # --- Logic to handle Zips and Images (Unchanged from before) ---
+    processed_files_count = 0
     for file in uploaded_files:
         if not file or not file.filename:
             continue
@@ -182,72 +205,58 @@ def process_images_endpoint():
         filename = secure_filename(file.filename)
 
         try:
-            # --- A. If it's a ZIP file ---
             if filename.lower().endswith('.zip'):
                 print(f"Job {job_id}: Extracting images from {filename}...")
-                # Read the file stream into memory
                 file_stream = io.BytesIO(file.read())
                 with zipfile.ZipFile(file_stream, 'r') as zf:
                     for member in zf.infolist():
-                        # Skip directories and non-image files
                         if member.is_dir():
                             continue
 
-                        # Use os.path.basename to prevent path traversal (e.g., ../../)
                         member_name = os.path.basename(member.filename)
                         if not member_name:
-                            continue  # Skip empty filenames (like folder entries)
+                            continue
 
                         if member_name.lower().endswith(('.png', '.jpg', '.jpeg')):
-                            # Define the full, safe extraction path
-                            extract_path = os.path.join(job_folder, member_name)
-
-                            # Extract the file data and write it
+                            extract_path = os.path.join(temp_job_folder, member_name)
                             with zf.open(member) as source_file:
                                 with open(extract_path, 'wb') as target_file:
                                     shutil.copyfileobj(source_file, target_file)
-                            processed_files = True
+                            processed_files_count += 1
 
-            # --- B. If it's a regular IMAGE file ---
             elif filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-                file.save(os.path.join(job_folder, filename))
-                processed_files = True
-
-            # --- C. Other files are ignored ---
+                file.save(os.path.join(temp_job_folder, filename))
+                processed_files_count += 1
 
         except zipfile.BadZipFile:
             print(f"Job {job_id}: Ignoring corrupt zip file: {filename}")
         except Exception as e:
             print(f"Job {job_id}: Error processing file {filename}: {e}")
+    # --- End of Zip/Image handling ---
 
-    # --- 3. CHECK IF ANY FILES WERE ACTUALLY PROCESSED ---
-    if not processed_files:
-        # Clean up the empty job folder
-        shutil.rmtree(job_folder)
+    if processed_files_count == 0:
+        shutil.rmtree(temp_job_folder)
         return jsonify({"error": "No valid image files (png, jpg, jpeg) or .zip files were provided."}), 400
 
     # Initialize the job status in the JOBS dictionary
     JOBS[job_id] = {'status': 'processing', 'progress': 0, 'result': None}
 
     # Start the background thread
-    thread = threading.Thread(target=run_face_processing_job, args=(job_id, job_folder, preset_name))
+    thread = threading.Thread(target=run_face_processing_job, args=(job_id, temp_job_folder, preset_name))
     thread.start()
 
     return jsonify({"message": "Processing started.", "job_id": job_id})
 
-# --- Status Endpoint ---
+
 @app.route('/api/status/<job_id>')
 def get_status(job_id):
     """Returns the status and result of a specific job."""
     job = JOBS.get(job_id)
     if job is None:
         return jsonify({"error": "Job not found"}), 404
-
-    # For now, we only have 'processing' or 'complete'/'failed'
-    # In a more advanced version, the background job could update a 'progress' percentage
     return jsonify(job)
 
-# --- Cancel Endpoint ---
+
 @app.route('/api/cancel/<job_id>', methods=['POST'])
 def cancel_job(job_id):
     """Requests cancellation of a running job."""
@@ -258,65 +267,25 @@ def cancel_job(job_id):
         return jsonify({"success": True, "message": "Cancellation requested."})
     return jsonify({"error": "Job not found or already completed."}), 404
 
-# --- NEW: Download Zip Endpoint ---
+
 @app.route('/api/download/<job_id>')
 def download_zip(job_id):
-    """Generates and sends a zip file of the sorted results."""
+    """
+    Generates and sends a zip file of the sorted results.
+    --- THIS FUNCTION MUST BE UPDATED ---
+    --- For now, it will NOT work, as results are not in memory. ---
+    """
     job = JOBS.get(job_id)
     if not job or job['status'] != 'complete':
         return jsonify({"error": "Job not found or not complete"}), 404
 
-    results = job.get('result', [])
-    if not results:
-        return jsonify({"error": "No results to download"}), 404
+    # TODO: This logic is now broken because results are not in memory.
+    # We will fix this later by adding a "download_gallery" function
+    # that reads from the database.
+    return jsonify({"error": "Download function is not yet updated for new architecture."}), 501
 
-    # Create an in-memory zip file
-    memory_file = io.BytesIO()
-    with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
-        # Keep track of files added to avoid duplicates from multiple faces in one image
-        added_files_in_zip = set()
-
-        for face in results:
-            try:
-                # Replicate frontend logic for folder names
-                cluster_id = face.get("cluster_id")
-                is_named = face.get("is_named")
-
-                if is_named:
-                    folder_name = str(cluster_id)
-                elif str(cluster_id) == '-1':
-                    folder_name = 'Unknowns'
-                else:
-                    folder_name = f"Person {int(cluster_id) + 1}"
-
-                # The image_url is the path from the app's root (e.g., "static/uploads/...")
-                source_file_path = face.get("image_url")
-
-                # Get just the filename (e.g., "samarth_1.jpg")
-                file_name = os.path.basename(source_file_path)
-
-                # This is the full path *inside* the zip file (e.g., "Samarth/samarth_1.jpg")
-                arcname = os.path.join(folder_name, file_name)
-
-                # Add the file to the zip if it hasn't been added already
-                if arcname not in added_files_in_zip:
-                    zf.write(source_file_path, arcname=arcname)
-                    added_files_in_zip.add(arcname)
-
-            except Exception as e:
-                print(f"Error adding {face.get('image_url')} to zip: {e}")
-                # Continue trying to add other files
-
-    # Rewind the file to the beginning
-    memory_file.seek(0)
-
-    return send_file(
-        memory_file,
-        download_name=f'sorted_photos_{job_id}.zip',
-        as_attachment=True,
-        mimetype='application/zip'
-    )
 
 # --- Main Execution ---
 if __name__ == '__main__':
+    # Note: We run on port 5001 now
     app.run(debug=True, port=5001)
