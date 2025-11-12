@@ -11,6 +11,7 @@ import numpy as np
 from sklearn.cluster import DBSCAN
 from sklearn.metrics.cluster import homogeneity_score, completeness_score, v_measure_score
 from sklearn.preprocessing import normalize
+import sys
 
 
 
@@ -40,7 +41,7 @@ def process_images_dlib(source_dir, preset_settings, existing_paths=set(), progr
     total_faces_found = 0
     resize_width = preset_settings['resize_width']
 
-    for i, image_path in enumerate(tqdm(new_image_paths, desc="Processing (dlib)")):
+    for i, image_path in enumerate(tqdm(new_image_paths, desc="Processing (dlib)", file=sys.stderr)):
         try:
             image = cv2.imread(image_path)
             if image is None: continue
@@ -97,7 +98,7 @@ def process_images_deepface(source_dir, preset_settings, existing_paths=set(), p
     # Pre-build model once for efficiency within this function call
     DeepFace.build_model(model_name)
 
-    for i, image_path in enumerate(tqdm(new_image_paths, desc="Processing (DeepFace)")):
+    for i, image_path in enumerate(tqdm(new_image_paths, desc="Processing (DeepFace)", file=sys.stderr)):
         try:
             embedding_objs = DeepFace.represent(
                 img_path=image_path, model_name=model_name,

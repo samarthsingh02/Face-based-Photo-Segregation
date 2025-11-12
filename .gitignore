@@ -34,3 +34,6 @@ static/uploads/*
 
 # Database files
 *.db
+
+# deployment process files
+lightsail-deploying.txt

@@ -12,14 +12,18 @@ import yaml
 
 # --- Flask App Initialization ---
 app = Flask(__name__)
-database.init_db() # <--- AND ADD THIS LINE
+database.init_db()
 
-# CHANGE: The upload folder is now inside the 'static' directory
+# The upload folder is now inside the 'static' directory
 UPLOAD_FOLDER = os.path.join("static", "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# --- NEW: Shared dictionary to track job status ---
+# Shared dictionary to track job status ---
 JOBS = {}
+
+# Custom exception for cancellation ---
+class JobCancelledException(Exception):
+    pass
 
 @app.route('/')
 def index():
@@ -40,12 +44,22 @@ def run_face_processing_job(job_id, image_folder, preset_name):
     """
     print(f"Job {job_id}: Starting background processing for preset '{preset_name}'...")
     try:
+        # Check for immediate cancellation ---
+        if JOBS[job_id].get('status') == 'cancelling':
+            JOBS[job_id]['status'] = 'cancelled'
+            print(f"Job {job_id}: Cancelled before starting.")
+            return
+
         with open('config.yaml', 'r') as f:
             config = yaml.safe_load(f)
         preset_settings = config['presets'][preset_name]
         threshold = preset_settings['clustering']['eps']
 
         def update_progress(current, total, stage=""):
+            # Check for cancellation signal
+            if JOBS[job_id].get('status') == 'cancelling':
+                raise JobCancelledException(f"Job {job_id} cancelled during {stage}.")
+
             # Progress is now split into two stages: detection (80%) and clustering (20%)
             base_progress = 80 if stage == "detection" else 100
             stage_progress = int((current / total) * base_progress) if total > 0 else base_progress
@@ -83,8 +97,10 @@ def run_face_processing_job(job_id, image_folder, preset_name):
         # 2c. Cluster only the unidentified faces
         clustered_unidentified = []
         if unidentified_faces:
+            # Check for cancellation before clustering ---
+            if JOBS[job_id].get('status') == 'cancelling':
+                raise JobCancelledException(f"Job {job_id} cancelled before clustering.")
             clustered_unidentified, _, _ = core_engine.cluster_faces(unidentified_faces, preset_settings)
-
         JOBS[job_id]['progress'] = 95 # Update progress before saving
 
         # 2d. Save ALL new faces to the database and get their new IDs
@@ -110,6 +126,12 @@ def run_face_processing_job(job_id, image_folder, preset_name):
         JOBS[job_id]['status'] = 'complete'
         print(f"Job {job_id}: Processing complete.")
 
+
+    # --- NEW: Catch the cancellation exception ---
+    except JobCancelledException as e:
+        JOBS[job_id]['status'] = 'cancelled'
+        print(str(e))
+
     except Exception as e:
         JOBS[job_id]['status'] = 'failed'
         JOBS[job_id]['error'] = str(e)
@@ -133,14 +155,14 @@ def name_cluster():
     return jsonify({"success": True, "message": f"Linked {len(face_ids)} faces to '{name}'."})
 
 
-# --- UPDATED: Main /api/process Endpoint ---
+# --- Main /api/process Endpoint ---
 @app.route('/api/process', methods=['POST'])
 def process_images_endpoint():
     uploaded_files = request.files.getlist('photos')
     if not uploaded_files:
         return jsonify({"error": "No photos provided"}), 400
 
-    # --- CHANGE: Get the preset name from the form data ---
+    # ---Get the preset name from the form data ---
     # Default to 'dlib_hog' if for some reason it's not provided
     preset_name = request.form.get('preset', 'dlib_hog')
 
@@ -151,18 +173,18 @@ def process_images_endpoint():
     for file in uploaded_files:
         file.save(os.path.join(job_folder, file.filename))
 
-    # NEW: Initialize the job status in the JOBS dictionary
+    # Initialize the job status in the JOBS dictionary
     JOBS[job_id] = {'status': 'processing', 'progress': 0, 'result': None}
 
     # Start the background thread
-    # --- CHANGE: Pass the selected preset_name to the background job ---
+    # Pass the selected preset_name to the background job ---
     thread = threading.Thread(target=run_face_processing_job, args=(job_id, job_folder, preset_name))
     thread.start()
 
     return jsonify({"message": "Processing started.", "job_id": job_id})
 
 
-# --- NEW: Status Endpoint ---
+# --- Status Endpoint ---
 @app.route('/api/status/<job_id>')
 def get_status(job_id):
     """Returns the status and result of a specific job."""
@@ -173,6 +195,17 @@ def get_status(job_id):
     # For now, we only have 'processing' or 'complete'/'failed'
     # In a more advanced version, the background job could update a 'progress' percentage
     return jsonify(job)
+
+# --- Cancel Endpoint ---
+@app.route('/api/cancel/<job_id>', methods=['POST'])
+def cancel_job(job_id):
+    """Requests cancellation of a running job."""
+    job = JOBS.get(job_id)
+    if job and job['status'] == 'processing':
+        JOBS[job_id]['status'] = 'cancelling'
+        print(f"Job {job_id}: Cancellation requested.")
+        return jsonify({"success": True, "message": "Cancellation requested."})
+    return jsonify({"error": "Job not found or already completed."}), 404
 
 
 # --- Main Execution ---

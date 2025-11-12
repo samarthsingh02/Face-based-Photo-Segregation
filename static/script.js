@@ -10,7 +10,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const presetSelector = document.getElementById('preset-selector');
     const togglePreviewsButton = document.getElementById('toggle-previews-button');
 
+    // --- ADD THIS LINE ---
+    const cancelButton = document.getElementById('cancel-button');
+
     let selectedFiles = [];
+    // --- ADD THIS LINE ---
+    let currentJobId = null;
 
     // --- Drag & Drop and File Selection Logic ---
     dropZone.addEventListener('click', () => photoInput.click());
@@ -76,6 +81,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         statusText.innerText = 'Uploading photos...';
         uploadButton.disabled = true;
+        // --- NEW: Show cancel button ---
+        cancelButton.style.display = 'inline-block';
 
         const formData = new FormData();
         for (const file of selectedFiles) {
@@ -87,14 +94,33 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch('/api/process', { method: 'POST', body: formData });
             const data = await response.json();
             if (response.ok) {
+                // --- NEW: Store current job ID ---
+                currentJobId = data.job_id;
                 pollJobStatus(data.job_id);
             } else {
                 statusText.innerText = `Error: ${data.error}`;
                 uploadButton.disabled = false;
+                // --- NEW: Hide cancel button on error ---
+                cancelButton.style.display = 'none';
             }
         } catch (error) {
             statusText.innerText = `An error occurred: ${error}`;
             uploadButton.disabled = false;
+            // --- NEW: Hide cancel button on error ---
+            cancelButton.style.display = 'none';
+        }
+    });
+
+    // --- NEW: Cancel Button Click Handler ---
+    cancelButton.addEventListener('click', async () => {
+        if (currentJobId) {
+            try {
+                await fetch(`/api/cancel/${currentJobId}`, { method: 'POST' });
+                statusText.innerText = 'Cancelling...';
+                cancelButton.disabled = true;
+            } catch (error) {
+                statusText.innerText = 'Error requesting cancellation.';
+            }
         }
     });
 
@@ -104,6 +130,12 @@ document.addEventListener('DOMContentLoaded', () => {
         statusText.innerText = 'Processing... 0%';
 
         const interval = setInterval(async () => {
+            // --- NEW: Don't poll if job ID was cleared ---
+            if (!currentJobId || currentJobId !== jobId) {
+                clearInterval(interval);
+                return;
+            }
+
             try {
                 const response = await fetch(`/api/status/${jobId}`);
                 const data = await response.json();
@@ -113,27 +145,41 @@ document.addEventListener('DOMContentLoaded', () => {
                     statusText.innerText = `Processing... ${data.progress}%`;
                 }
 
-                if (data.status === 'complete') {
+                // --- UPDATED: Handle 'complete', 'failed', and new 'cancelled' statuses ---
+                if (data.status === 'complete' || data.status === 'failed' || data.status === 'cancelled') {
                     clearInterval(interval);
-                    progressBar.value = 100;
-                    statusText.innerText = 'Processing complete! Displaying results.';
-                    // --- CHANGE: Pass the jobId to the displayResults function ---
-                    displayResults(data.result, jobId);
+                    currentJobId = null;
+                    cancelButton.style.display = 'none';
+                    cancelButton.disabled = false;
                     uploadButton.disabled = false;
-                } else if (data.status === 'failed') {
-                    clearInterval(interval);
-                    statusText.innerText = `Job failed: ${data.error}`;
-                    uploadButton.disabled = false;
+
+                    if (data.status === 'complete') {
+                        progressBar.value = 100;
+                        statusText.innerText = 'Processing complete! Displaying results.';
+                        displayResults(data.result, jobId);
+                    } else if (data.status === 'failed') {
+                        statusText.innerText = `Job failed: ${data.error}`;
+                    } else if (data.status === 'cancelled') {
+                        statusText.innerText = 'Job cancelled.';
+                    }
                 }
             } catch (error) {
                 clearInterval(interval);
                 statusText.innerText = 'Error checking status.';
+
+                console.error("Error in pollJobStatus:", error); // This will show us the real error
+
                 uploadButton.disabled = false;
+                // --- NEW: Hide cancel button on error ---
+                currentJobId = null;
+                cancelButton.style.display = 'none';
+                cancelButton.disabled = false;
             }
         }, 2000);
     };
 
     const displayResults = (results, jobId) => {
+        // ... (this function remains unchanged)
         resultsArea.innerHTML = '';
         if (!results || typeof results === 'string' || results.length === 0) {
             resultsArea.innerText = typeof results === 'string' ? results : 'No results to display.';
@@ -279,6 +325,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 });
 // --- Image Enlargement Modal Logic ---
+// ... (this function remains unchanged)
 document.addEventListener('click', (e) => {
     // Check if an enlargeable image inside the results area was clicked
     if (e.target.matches('#results-area img[data-enlargeable]')) {
