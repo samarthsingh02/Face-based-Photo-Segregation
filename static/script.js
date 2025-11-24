@@ -7,7 +7,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const progressBar = document.getElementById('progress-bar');
     const previewArea = document.getElementById('preview-area');
     const resultsArea = document.getElementById('results-area');
-    const presetSelector = document.getElementById('preset-selector');
+    //const presetSelector = document.getElementById('preset-selector');
+    //removed preset selector - models cnn and facenet are removed, by default dlib_hog is used
     const togglePreviewsButton = document.getElementById('toggle-previews-button');
     const cancelButton = document.getElementById('cancel-button');
     const downloadButton = document.getElementById('download-button');
@@ -123,7 +124,7 @@ document.addEventListener('DOMContentLoaded', () => {
         for (const file of selectedFiles) {
             formData.append('photos', file);
         }
-        formData.append('preset', presetSelector.value);
+        formData.append('preset', 'dlib_hog');
 
         try {
             const response = await fetch('/api/process', { method: 'POST', body: formData });
